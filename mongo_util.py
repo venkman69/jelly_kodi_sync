@@ -1,23 +1,11 @@
-import logging
 import os
 from pathlib import Path
-from dotenv import load_dotenv
 import pymongo
 from pymongo.collection import Collection
 from pymongo.errors import ConnectionFailure
 import subprocess
 
-def config_logger(log_file_name:str, log_file_dir:Path):
-    log_file_dir.mkdir(parents=True,exist_ok=True)
-    log_file_path = log_file_dir / log_file_name
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format= "%(asctime)s %(levelname)s %(name)s:%(funcName)s():%(lineno)i %(message)s",
-        handlers=[
-            logging.FileHandler(log_file_path)
-        ]
-    )
-    return logging.getLogger(__name__)
+from utils import config_logger, load_dotenvs
 
 def start_mongodb():
     """
@@ -46,7 +34,7 @@ def get_mongo_connection():
     # Set a 5-second timeout for server selection
     client = pymongo.MongoClient(db_connection_host, db_connection_port)
     try:
-        print(f"Checking of mongo is up with timeout of 5 seconds")
+        print("Checking of mongo is up with timeout of 5 seconds")
         # Check if the connection is successful with a 5-second timeout for the ping command
         with pymongo.timeout(5):
             client.admin.command('ping')
@@ -107,13 +95,13 @@ if __name__ == "__main__":
         print("Loading environment variables from .env file")
     
     print(f"Checking before loading: LOG_DIR: {os.getenv('LOG_DIR')}")
-    load_dotenv()
+    load_dotenvs()
     print(f"Checking after loading: LOG_DIR: {os.getenv('LOG_DIR')}")
     logdir = Path(os.getenv("LOG_DIR", "./logs"))
     logfile = os.getenv("LOG_FILE", "jelly_kodi_sync.log")
     log_file_path = logdir / logfile
     logdir.mkdir(parents=True, exist_ok=True)
-    logger = config_logger(logfile, logdir)
+    logging = config_logger(logfile, logdir)
     item_collection = get_mongo_collection("items")
 
     

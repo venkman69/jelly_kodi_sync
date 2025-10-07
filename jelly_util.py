@@ -2,11 +2,12 @@ import requests
 from typing import Optional
 from urllib.parse import urljoin
 import json
-from dotenv import load_dotenv, find_dotenv
+from dotenv import find_dotenv
 import os
 from pymongo.results import BulkWriteResult
 from pymongo import UpdateOne
 from mongo_util import get_mongo_collection
+from utils import load_dotenvs
 
 
 
@@ -197,9 +198,7 @@ def get_items(session: JellySession) -> list[dict]:
 
 
 if __name__ == "__main__":
-    dotenvloc = find_dotenv()
-    print(f"Loading environment from {dotenvloc}")
-    load_dotenv(dotenvloc)
+    load_dotenvs()
     jellyfin_url = os.getenv("JELLYFIN_URL")
     api_key = os.getenv("JELLYFIN_API_KEY")
     if not jellyfin_url or not api_key:
