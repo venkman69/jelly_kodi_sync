@@ -1,3 +1,5 @@
+import logging
+import re
 import requests
 from typing import Optional
 from urllib.parse import urljoin
@@ -7,7 +9,10 @@ import os
 from pymongo.results import BulkWriteResult
 from pymongo import UpdateOne
 from mongo_util import get_mongo_collection
-from utils import load_dotenvs
+from utils import convert_windows_to_unix_path, load_dotenvs
+
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -30,7 +35,7 @@ class JellySession(object):
         return self.session.post(url, **kwargs)
 
 
-def ticks_from_seconds(seconds: float) -> int:
+def seconds_to_ticks(seconds: float) -> int:
     """
     Converts seconds to ticks (10,000 ticks per millisecond).
 
@@ -41,6 +46,18 @@ def ticks_from_seconds(seconds: float) -> int:
         int: The equivalent time in ticks.
     """
     return int(seconds * 10_000_000)
+
+def ticks_to_seconds(ticks: int) -> float:
+    """
+    Converts ticks to seconds.
+
+    Args:
+        ticks (int): The time in ticks.
+
+    Returns:
+        float: The equivalent time in seconds.
+    """
+    return ticks / 10_000_000
 
 
 def update_playback_position(
@@ -117,15 +134,15 @@ def update_playback_position(
         return False
 
 
-def jelly_pull(session: JellySession):
+def jelly_pull()->bool:
     """
-    Fetch all watch status of all items from Jellyfin server and save into an sqlite database.
-    Args:
-        jellyfin_url (str): Base URL of the Jellyfin server (e.g., http://localhost:8096)
-        api_key (str): Jellyfin API key
-        db_path (str): Path to the sqlite database file
-        user_id (Optional[str]): Jellyfin user ID. If not provided, will fetch the first user.
+    Fetch all watch status of all items from Jellyfin server and save into mongodb
     """
+    jellyfin_url = os.getenv("JELLYFIN_URL")
+    api_key = os.getenv("JELLYFIN_API_KEY")
+    if not jellyfin_url or not api_key:
+        raise ValueError("JELLYFIN_URL and JELLYFIN_API_KEY must be set in environment variables.")
+    session = JellySession(jellyfin_url, api_key)
 
     # Get user id if not provided
     users = get_users(session)
@@ -145,10 +162,36 @@ def jelly_pull(session: JellySession):
             item["UserId"] = user_id
             item["UserName"] = user["Name"]
             # A unique identifier for a user's item is the combination of UserId and the item's Id
+            if item.get("Path"):
+                item["unified_root"], item["unified_file"] = get_root_file_path(item["Path"])
+
             jellyfin_item_ids.add(f"{user_id}_{item['Id']}")
 
         all_users_items.extend(items)
     sync_db(all_users_items, jellyfin_item_ids)
+    return True
+def get_root_file_path(path:str)->tuple:
+    """
+    Get the path parsed as RIP, <folder>/<file>
+    or TRANSCODED, <file>
+    or EPISODIC, <folder>/<season>/<file>
+    key is the three root folders
+
+    """
+    # jellyfin is running on windows with <nas>/movies/ mounted at M: with RIP|TRANSCODED|EPISODIC under it
+    jelly_path_pat = re.compile(os.getenv("JELLY_MOUNT_PAT",""))
+    jelly_match = jelly_path_pat.match(path)
+    if not jelly_match:
+        logger.error(f"Match not found for: {path}")
+        return None,None
+    if len(jelly_match.groups()) == 3:
+        unified_root = jelly_match.groups()[1]
+        unified_file = convert_windows_to_unix_path(jelly_match.groups()[2])
+        return unified_root, unified_file
+    else:
+        logger.error(f"Incorrect matches found for: {path}: {jelly_match.groups()}")
+        return None, None 
+   
 
 
 def sync_db(all_users_items: list[dict], jellyfin_item_ids: set[str]):
@@ -156,7 +199,8 @@ def sync_db(all_users_items: list[dict], jellyfin_item_ids: set[str]):
     Synchronizes the fetched Jellyfin items with the MongoDB database.
     It upserts new/updated items and deletes stale items.
     """
-    mongo_collection = get_mongo_collection("items")
+    JELLY_COLLECTION = os.getenv("JELLY_COLLECTION", "jellyitems")
+    mongo_collection = get_mongo_collection(JELLY_COLLECTION)
 
     # 1. Upsert all items from Jellyfin into MongoDB
     if all_users_items:
@@ -195,6 +239,48 @@ def get_items(session: JellySession) -> list[dict]:
     items_resp.raise_for_status()
     items = items_resp.json().get("Items", [])
     return items
+
+
+def get_watched_items_from_mongo():
+    JELLY_COLLECTION = os.getenv("JELLY_COLLECTION", "jellyitems")
+    mongo_collection = get_mongo_collection(JELLY_COLLECTION)
+    query={"$or": [{"UserData.Played": {"$gt": 0}}, {"UserData.PlaybackPositionTicks": {"$gt": 0}}]}
+    result = list(mongo_collection.find(query))
+    return result
+
+def sync_watch_status_to_jelly_from_kodi(kodi_item: dict, jelly_item: dict, session: JellySession):
+    """
+    Using the Jellyfin API, set the playcount and resume position in Jellyfin based on a Kodi item.
+    """
+    # Extract watch status from the Kodi item
+    kodi_playcount = kodi_item.get("playcount", 0)
+    kodi_resume_seconds = kodi_item.get("resume", {}).get("position", 0)
+
+    # Extract current status from Jellyfin item to compare
+    jelly_user_data = jelly_item.get("UserData", {})
+    jelly_playcount = jelly_user_data.get("PlayCount", 0)
+    jelly_resume_ticks = jelly_user_data.get("PlaybackPositionTicks", 0)
+
+    # Convert Kodi seconds to Jellyfin ticks
+    new_position_ticks = seconds_to_ticks(kodi_resume_seconds)
+
+    # Check if an update is necessary to avoid redundant API calls
+    position_diff_seconds = abs(kodi_resume_seconds - ticks_to_seconds(jelly_resume_ticks))
+    if kodi_playcount == jelly_playcount and position_diff_seconds < 2:
+        logger.debug(f"Watch status for '{jelly_item.get('Name')}' is already in sync. Skipping.")
+        return
+
+    logger.info(f"Syncing to Jellyfin '{jelly_item.get('Name')}': playcount={kodi_playcount}, resume_ticks={new_position_ticks}")
+
+    update_playback_position(
+        session=session,
+        user_id=jelly_item["UserId"],
+        item_id=jelly_item["Id"],
+        position_ticks=new_position_ticks,
+        play_count=kodi_playcount,
+    )
+
+
 
 
 if __name__ == "__main__":

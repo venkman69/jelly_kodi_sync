@@ -1,0 +1,18 @@
+#!/bin/bash
+SCRIPT_DIR=$(dirname $0)
+PROJ_DIR=$(dirname $SCRIPT_DIR)
+
+. $PROJ_DIR/.env
+. $PROJ_DIR/.credentials
+
+ping -c 1 $KODIHOST
+if [ $? -ne 0 ]; then
+    >&2 echo "KODIHOST is not responding"
+    exit 1
+fi
+if [ -d common_infra ]; then
+    $PROJ_DIR/common_infra/mongo_podman start
+fi
+. $PROJ_DIR/venv/bin/activate
+
+python $PROJ_DIR/sync_jelly_kodi.py
