@@ -161,8 +161,8 @@ def sync_watch_status_in_kodi_from_jelly(jelly_item:dict, kodi_item:dict):
     resume_position = jelly_item["UserData"]["PlaybackPositionTicks"]
     playcount = jelly_item["UserData"]["PlayCount"]
     resume_position_in_seconds = jelly_util.ticks_to_seconds(resume_position)
-    if abs(resume_position_in_seconds - kodi_item["resume"]["position"]) < 1:
-        logger.info(f"Resume position within 1 second of each other - ignoring for {kodi_item['title']}")
+    if kodi_item["playcount"] == playcount and abs(kodi_item["resume"]["position"] - resume_position_in_seconds) < 1:
+        logger.info(f"Watch status for '{kodi_item['title']}' is already in sync. Skipping.")
         return
     if "tvshowid" in kodi_item:
         episode_id = kodi_item["episodeid"]

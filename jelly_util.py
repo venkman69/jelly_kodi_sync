@@ -4,7 +4,6 @@ import requests
 from typing import Optional
 from urllib.parse import urljoin
 import json
-from dotenv import find_dotenv
 import os
 from pymongo.results import BulkWriteResult
 from pymongo import UpdateOne
@@ -244,7 +243,7 @@ def get_items(session: JellySession) -> list[dict]:
 def get_watched_items_from_mongo():
     JELLY_COLLECTION = os.getenv("JELLY_COLLECTION", "jellyitems")
     mongo_collection = get_mongo_collection(JELLY_COLLECTION)
-    query={"$or": [{"UserData.Played": {"$gt": 0}}, {"UserData.PlaybackPositionTicks": {"$gt": 0}}]}
+    query={"$or": [{"UserData.PlayCount": {"$gt": 0}}, {"UserData.PlaybackPositionTicks": {"$gt": 0}}]}
     result = list(mongo_collection.find(query))
     return result
 
@@ -293,7 +292,7 @@ if __name__ == "__main__":
     users = get_users(session)
     items = get_items(session)
 
-    jelly_pull(session) # Removed db_path argument
+    jelly_pull() # Removed db_path argument
 
     for u in users:
         if u["Name"] == "venkman":

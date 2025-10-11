@@ -7,6 +7,7 @@ import kodi_util
 from mongo_util import get_mongo_collection
 import utils
 from pathlib import Path
+from datetime import datetime
 
 
 logging.getLogger("pymongo").setLevel(logging.WARNING)
@@ -34,7 +35,7 @@ def set_watch_from_jelly_to_kodi(jelly_watched_items:list[dict]):
             kodi_util.sync_watch_status_in_kodi_from_jelly(item, found_items[0])
         else:
             logger.warning(f"No match found: {file_location}")
-    logger.info(f"Found {found_counter} items out of {len(jelly_watched_items)} in kodi")
+    logger.info(f"Found {found_counter} Kodi items out of {len(jelly_watched_items)} JellyFin items in kodi")
 
 def set_watch_from_kodi_to_jelly(kodi_watched_items:list[dict]):
     jellyfin_url = os.getenv("JELLYFIN_URL")
@@ -64,7 +65,7 @@ def set_watch_from_kodi_to_jelly(kodi_watched_items:list[dict]):
         else:
             logger.warning(f"No Jellyfin match found for Kodi item: {file_location}")
 
-    logger.info(f"Found {found_counter} Jellyfin items to sync from {len(kodi_watched_items)} watched items in Kodi.")
+    logger.info(f"Found {found_counter} Jellyfin items out of {len(kodi_watched_items)} Kodi items in JellyFin.")
 
 
 
@@ -83,29 +84,52 @@ if __name__ == "__main__":
     # do the same steps in reverse
     utils.config_logger("jelly_kodi_sync.log",Path("./logs"))
     logger = logging.getLogger(__name__)
-    logger.info("Starting sync")
-    logger.info("Step 1/?: get jelly items")
+
+    logger.info(f"Starting sync at {datetime.now()}")
+    start_time = datetime.now()
+    logger.info(f"Starting sync at {start_time}")
+
+    step_start_time = datetime.now()
+    logger.info("Step 1/8: get jelly items")
     jelly_pull()
-    logger.info("Step 2/?: get kodi items")
+    step_end_time = datetime.now()
+    logger.info(f"Step 1/8 completed in {step_end_time - step_start_time}")
+
+    step_start_time = datetime.now()
+    logger.info("Step 2/8: get kodi items")
     kodi_pull()
-    logger.info("Step 3/?: Find jelly watched items")
+    step_end_time = datetime.now()
+    logger.info(f"Step 2/8 completed in {step_end_time - step_start_time}")
+
+    step_start_time = datetime.now()
+    logger.info("Step 3/8: Find jelly watched items")
     jelly_watched = jelly_util.get_watched_items_from_mongo()
     logger.info(f"Found {len(jelly_watched)} jelly watched items")
-    
-    logger.info("Step 4/?: Find kodi watched items")
+    step_end_time = datetime.now()
+    logger.info(f"Step 3/8 completed in {step_end_time - step_start_time}")
+
+    step_start_time = datetime.now()
+    logger.info("Step 4/8: Find kodi watched items")
     kodi_watched = kodi_util.get_watched_items_from_mongo()
     logger.info(f"Found {len(kodi_watched)} kodi watched items")
+    step_end_time = datetime.now()
+    logger.info(f"Step 4/8 completed in {step_end_time - step_start_time}")
 
-    logger.info("Step 5/?: Sync jelly watch into kodi")
+    step_start_time = datetime.now()
+    logger.info("Step 5/8: Sync jelly watch into kodi")
     set_watch_from_jelly_to_kodi(jelly_watched)
-
-    logger.info("Step 6/?: Sync kodi watch into jelly")
-    set_watch_from_kodi_to_jelly(kodi_watched)
-
-    logger.info("step 7/? resync jelly items")
+    step_end_time = datetime.now()
+    logger.info(f"Step 5/8 completed in {step_end_time - step_start_time}")
+    logger.info("step 7/8 resync jelly items")
+    step_start_time = datetime.now()
     jelly_pull()
+    step_end_time = datetime.now()
+    logger.info(f"Step 7/8 completed in {step_end_time - step_start_time}")
 
-    logger.info("step 8/? resync kodi items")
+    logger.info("step 8/8 resync kodi items")
+    step_start_time = datetime.now()
     kodi_pull()
+    step_end_time = datetime.now()
+    logger.info(f"Step 8/8 completed in {step_end_time - step_start_time}")
 
     logger.info("Done")
