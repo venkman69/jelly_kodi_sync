@@ -5,14 +5,15 @@ PROJ_DIR=$(dirname $SCRIPT_DIR)
 . $PROJ_DIR/.env
 . $PROJ_DIR/.credentials
 
-ping -c 1 $KODIHOST
-if [ $? -ne 0 ]; then
-    >&2 echo "KODIHOST is not responding"
+if [ -d common_infra ]; then
+    . $PROJ_DIR/common_infra/run_functions
+else
+    >&2 echo "Project requires common_infra"
     exit 1
 fi
-if [ -d common_infra ]; then
-    $PROJ_DIR/common_infra/mongo_podman start
-fi
-. $PROJ_DIR/venv/bin/activate
+start
 
-python $PROJ_DIR/sync_jelly_kodi.py
+start_this() {
+    . $PROJ_DIR/venv/bin/activate
+    python $PROJ_DIR/sync_jelly_kodi.py
+}
