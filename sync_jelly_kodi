@@ -11,9 +11,10 @@ else
     >&2 echo "Project requires common_infra"
     exit 1
 fi
-start
-
+export pidfile="./work/.$SCRIPTNAME.pid"
 start_this() {
     . $PROJ_DIR/venv/bin/activate
     python $PROJ_DIR/sync_jelly_kodi.py
 }
+
+start
