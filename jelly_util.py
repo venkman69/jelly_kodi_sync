@@ -242,8 +242,10 @@ def get_items(session: JellySession) -> list[dict]:
 
 def get_watched_items_from_mongo():
     JELLY_COLLECTION = os.getenv("JELLY_COLLECTION", "jellyitems")
+    # TODO: add option to allow 'all' users and a list of users
+    JELLYFIN_SYNC_USER = os.getenv("JELLYFIN_SYNC_USER", "venkman")
     mongo_collection = get_mongo_collection(JELLY_COLLECTION)
-    query={"$or": [{"UserData.PlayCount": {"$gt": 0}}, {"UserData.PlaybackPositionTicks": {"$gt": 0}}]}
+    query={"UserName":JELLYFIN_SYNC_USER,"$or": [{"UserData.PlayCount": {"$gt": 0}}, {"UserData.PlaybackPositionTicks": {"$gt": 0}}]}
     result = list(mongo_collection.find(query))
     return result
 
@@ -251,6 +253,8 @@ def sync_watch_status_to_jelly_from_kodi(kodi_item: dict, jelly_item: dict, sess
     """
     Using the Jellyfin API, set the playcount and resume position in Jellyfin based on a Kodi item.
     """
+    dry_run = os.getenv("DRY_RUN", "false") == "true"
+
     # Extract watch status from the Kodi item
     kodi_playcount = kodi_item.get("playcount", 0)
     kodi_resume_seconds = kodi_item.get("resume", {}).get("position", 0)
@@ -269,16 +273,18 @@ def sync_watch_status_to_jelly_from_kodi(kodi_item: dict, jelly_item: dict, sess
         logger.debug(f"Watch status for '{jelly_item.get('Name')}' is already in sync. Skipping.")
         return
 
-    logger.info(f"Syncing to Jellyfin '{jelly_item.get('Name')}': playcount={kodi_playcount}, resume_ticks={new_position_ticks}")
+    logger.debug(f"Syncing to Jellyfin '{jelly_item.get('Name')}': playcount={kodi_playcount}, resume_ticks={new_position_ticks}")
 
-    update_playback_position(
-        session=session,
-        user_id=jelly_item["UserId"],
-        item_id=jelly_item["Id"],
-        position_ticks=new_position_ticks,
-        play_count=kodi_playcount,
-    )
-
+    if not dry_run:
+        update_playback_position(
+            session=session,
+            user_id=jelly_item["UserId"],
+            item_id=jelly_item["Id"],
+            position_ticks=new_position_ticks,
+            play_count=kodi_playcount,
+        )
+    else:
+        logger.info(f"Dry-Run enabled: setting watch status for '{jelly_item.get('Name')}'.")
 
 
 

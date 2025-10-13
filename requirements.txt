@@ -3,3 +3,4 @@ requests
 dotenv
 setuptools
 kodipydent
+cachetools

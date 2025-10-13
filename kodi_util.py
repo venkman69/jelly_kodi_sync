@@ -8,10 +8,12 @@ import jelly_util
 from mongo_util import get_mongo_collection
 import utils
 from pathlib import Path
+from cachetools import cached, LRUCache
 
 logger = logging.getLogger(__name__)
 
 
+@cached(LRUCache(maxsize=1))
 def getKodi() -> Kodi: # type: ignore
     KODIHOST = os.getenv("KODIHOST", "localhost")
     KODIPORT = int(os.getenv("KODIPORT", "8080"))
@@ -157,21 +159,38 @@ def get_watched_items_from_mongo():
 
 def sync_watch_status_in_kodi_from_jelly(jelly_item:dict, kodi_item:dict):
     """using kodi api set the playcount and resume.position in kodi based on jellyfin item"""
+    dry_run = os.getenv("DRY_RUN", "false") == "true"
     mk = getKodi()
     resume_position = jelly_item["UserData"]["PlaybackPositionTicks"]
     playcount = jelly_item["UserData"]["PlayCount"]
     resume_position_in_seconds = jelly_util.ticks_to_seconds(resume_position)
     if kodi_item["playcount"] == playcount and abs(kodi_item["resume"]["position"] - resume_position_in_seconds) < 1:
-        logger.info(f"Watch status for '{kodi_item['title']}' is already in sync. Skipping.")
+        logger.debug(f"Watch status for '{kodi_item['title']}' is already in sync. Skipping.")
         return
     if "tvshowid" in kodi_item:
         episode_id = kodi_item["episodeid"]
-        mk.VideoLibrary.SetEpisodeDetails(episodeid=episode_id,
-            playcount=playcount, resume={"position": resume_position_in_seconds})
+        if not dry_run:
+            mk.VideoLibrary.SetEpisodeDetails(episodeid=episode_id,
+                playcount=playcount, resume={"position": resume_position_in_seconds})
+        else:
+            logger.info(f"Dry-Run enabled: setting episode details for '{kodi_item['title']}'")
     elif "movieid" in kodi_item:
         movie_id = kodi_item["movieid"]
-        mk.VideoLibrary.SetMovieDetails(movieid=movie_id,
-            playcount=playcount, resume={"position": resume_position_in_seconds})
+        if not dry_run:
+            jelly_is_played = jelly_item.get("played",False)
+            if jelly_is_played == False:
+                if resume_position_in_seconds > 0:
+                    mk.VideoLibrary.SetMovieDetails(movieid=movie_id,
+                        playcount=playcount, resume={"position": resume_position_in_seconds})
+                else:
+                    logger.debug(f"Not updating {kodi_item['title']} as it is not played and has no resume position.")
+                    # don't 
+            else:
+                mk.VideoLibrary.SetMovieDetails(movieid=movie_id,
+                    playcount=playcount, resume={"position": resume_position_in_seconds})
+                
+        else:
+            logger.info(f"Dry-Run enabled: setting movie details for '{kodi_item['title']}'")
     else:
         logger.error(f"Unknown item type: {kodi_item}")
 
