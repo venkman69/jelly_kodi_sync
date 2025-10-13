@@ -33,7 +33,7 @@ def set_watch_from_jelly_to_kodi(jelly_watched_items:list[dict]):
             found_counter+=1
             kodi_util.sync_watch_status_in_kodi_from_jelly(item, found_items[0])
         else:
-            logger.warning(f"No match found: {file_location}")
+            logger.debug(f"No match found: {file_location}")
     logger.info(f"Found {found_counter} Kodi items out of {len(jelly_watched_items)} JellyFin items in kodi")
 
 def set_watch_from_kodi_to_jelly(kodi_watched_items:list[dict]):
@@ -62,7 +62,7 @@ def set_watch_from_kodi_to_jelly(kodi_watched_items:list[dict]):
             for found_item in found_items:
                 jelly_util.sync_watch_status_to_jelly_from_kodi(item, found_item, session)
         else:
-            logger.warning(f"No Jellyfin match found for Kodi item: {file_location}")
+            logger.debug(f"No Jellyfin match found for Kodi item: {file_location}")
 
     logger.info(f"Found {found_counter} Jellyfin items out of {len(kodi_watched_items)} Kodi items in JellyFin.")
 
