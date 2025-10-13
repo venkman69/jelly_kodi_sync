@@ -20,7 +20,6 @@ def set_watch_from_jelly_to_kodi(jelly_watched_items:list[dict]):
     found_counter=0
     for item in jelly_watched_items:
         # find this item from mongo
-        item_type = item["Type"]
         file_location = item["unified_file"]
         query = {"unified_file": file_location}
         found_items = list(mongo_collection.find(query))
@@ -84,6 +83,14 @@ if __name__ == "__main__":
     # do the same steps in reverse
     utils.config_logger("jelly_kodi_sync.log",Path("./logs"))
     logger = logging.getLogger(__name__)
+    logger.info("Preflight check - is Kodi up...")
+    try:
+        kodi_conn = kodi_util.getKodi()
+        logger.info("Kodi is up")
+    except Exception as e:
+        logger.error(f"Kodi is down: {e}")
+        logger.info("Exiting as Kodi is unavailable")
+        exit(1)
 
     logger.info(f"Starting sync at {datetime.now()}")
     start_time = datetime.now()

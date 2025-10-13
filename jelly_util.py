@@ -112,24 +112,24 @@ def update_playback_position(
 
         # The server typically returns an HTTP 204 (No Content) for a successful update
         if response.status_code == 200:
-            print(
+            logger.debug(
                 f"Successfully updated playback status for Item {item_id} to {position_ticks} ticks."
             )
-            print(json.dumps(response.json(), indent=2))
+            logger.debug(json.dumps(response.json(), indent=2))
             return True
         else:
-            print(
+            logger.debug(
                 f"Failed to update playback status. Status Code: {response.status_code}"
             )
             # Try to print error details if available
             try:
-                print("Response content:", response.json())
+                logger.debug("Response content:", response.json())
             except json.JSONDecodeError:
-                print("Response content (text):", response.text)
+                logger.debug("Response content (text):", response.text)
             return False
 
     except requests.exceptions.RequestException as e:
-        print(f"An error occurred during the request: {e}")
+        logger.debug(f"An error occurred during the request: {e}")
         return False
 
 
@@ -148,7 +148,7 @@ def jelly_pull()->bool:
     all_users_items = []
     jellyfin_item_ids = set()
     for user in users:
-        print(f"Processing user ID: {user['Name']}:{user['Id']}")
+        logger.debug(f"Processing user ID: {user['Name']}:{user['Id']}")
         user_id = user["Id"]
         # Get all items for the user
         items_url = f"/Users/{user_id}/Items"
@@ -157,7 +157,7 @@ def jelly_pull()->bool:
         items_resp.raise_for_status()
         items = items_resp.json().get("Items", [])
         for item in items:
-            print(f"Processing item: {item['Name']}:{item['Id']}")
+            logger.debug(f"Processing item: {item['Name']}:{item['Id']}")
             item["UserId"] = user_id
             item["UserName"] = user["Name"]
             # A unique identifier for a user's item is the combination of UserId and the item's Id
@@ -213,14 +213,14 @@ def sync_db(all_users_items: list[dict], jellyfin_item_ids: set[str]):
         ]
         result: BulkWriteResult = mongo_collection.bulk_write(operations)
         if result.upserted_ids is not None:
-            print(f"Upserted items. Matched: {result.matched_count}, Upserted: {len(result.upserted_ids)}, Modified: {result.modified_count}")
+            logger.debug(f"Upserted items. Matched: {result.matched_count}, Upserted: {len(result.upserted_ids)}, Modified: {result.modified_count}")
 
     # 2. Delete items from MongoDB that are no longer in Jellyfin
     mongo_items = mongo_collection.find({}, {"_id": 1, "Id": 1, "UserId": 1})
     ids_to_delete = [item["_id"] for item in mongo_items if f"{item['UserId']}_{item['Id']}" not in jellyfin_item_ids]
     if ids_to_delete:
         delete_result = mongo_collection.delete_many({"_id": {"$in": ids_to_delete}})
-        print(f"Deleted {delete_result.deleted_count} stale items from MongoDB.")
+        logger.debug(f"Deleted {delete_result.deleted_count} stale items from MongoDB.")
 
 
 def get_users(session) -> list[dict]:
@@ -302,10 +302,10 @@ if __name__ == "__main__":
 
     for u in users:
         if u["Name"] == "venkman":
-            print(f"Found user venkman with ID {u['Id']}")
+            logger.debug(f"Found user venkman with ID {u['Id']}")
             venkat_id = u["Id"]
         if u["Name"] == "anita":
-            print(f"Found user anita with ID {u['Id']}")
+            logger.debug(f"Found user anita with ID {u['Id']}")
             anita_id = u["Id"]
 
     cra = "9ef0401d9b2ed05107e38a3d30904d51"  # crazy rich asians

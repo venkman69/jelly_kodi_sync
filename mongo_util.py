@@ -5,6 +5,7 @@ import pymongo
 from pymongo.collection import Collection
 from pymongo.errors import ConnectionFailure
 import subprocess
+from cachetools import cached, LRUCache
 
 from utils import config_logger, load_dotenvs
 
@@ -27,6 +28,7 @@ def start_mongodb():
         logger.error(f"Error starting MongoDB server: {e}")
         raise e
 
+@cached(LRUCache(maxsize=1))
 def get_mongo_connection():
     """
     Get a MongoDB connection using the configuration using dotenv
@@ -49,6 +51,7 @@ def get_mongo_connection():
 
     return client
 
+@cached(LRUCache(maxsize=10))
 def get_mongo_collection(db_collection_name:str="items")->Collection:
     client = get_mongo_connection()
     db_name = os.getenv("MONGO_DB_NAME", "jellykodi")
