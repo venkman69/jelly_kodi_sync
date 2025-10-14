@@ -16,6 +16,7 @@ class RelativePathFormatter(logging.Formatter):
 def config_logger(log_file_name:str, log_file_dir:Path):
     log_file_dir.mkdir(parents=True,exist_ok=True)
     log_file_path = log_file_dir / log_file_name
+    print(f"Log file path: {log_file_path}")
 
     # Get the root logger
     root_logger = logging.getLogger()

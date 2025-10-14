@@ -4,9 +4,9 @@ import logging
 import os
 from pymongo.results import BulkWriteResult
 from pymongo import UpdateOne
-import jelly_util
-from mongo_util import get_mongo_collection
-import utils
+from . import jelly_util
+from .mongo_util import get_mongo_collection
+from . import utils
 from pathlib import Path
 from cachetools import cached, LRUCache
 
@@ -81,7 +81,7 @@ def kodi_fetch_all_tv_shows():
     return all_episodes
 
 def kodi_tv_show_details(tv_show_id:str):
-    mk = getKodi()
+    getKodi()
 
 def get_root_file_path(path:str)->tuple:
     """
@@ -178,7 +178,7 @@ def sync_watch_status_in_kodi_from_jelly(jelly_item:dict, kodi_item:dict):
         movie_id = kodi_item["movieid"]
         if not dry_run:
             jelly_is_played = jelly_item.get("played",False)
-            if jelly_is_played == False:
+            if not jelly_is_played:
                 if resume_position_in_seconds > 0:
                     mk.VideoLibrary.SetMovieDetails(movieid=movie_id,
                         playcount=playcount, resume={"position": resume_position_in_seconds})

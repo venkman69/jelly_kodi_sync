@@ -1,0 +1,23 @@
+#!/bin/bash
+SCRIPT_DIR=$(dirname $0)
+SCRIPTNAME=$(basename "$0")
+PROJ_DIR=$(dirname $SCRIPT_DIR)
+cd $PROJ_DIR
+
+. $PROJ_DIR/.env
+. $PROJ_DIR/.credentials
+
+if [ -d common_infra ]; then
+    . $PROJ_DIR/common_infra/run_functions
+else
+    >&2 echo "Project requires common_infra"
+    exit 1
+fi
+export pidfile="./work/.$SCRIPTNAME.pid"
+start_this() {
+    . $PROJ_DIR/venv/bin/activate
+    uv sync
+    sync-jelly-kodi
+}
+
+start

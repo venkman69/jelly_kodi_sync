@@ -7,7 +7,7 @@ from pymongo.errors import ConnectionFailure
 import subprocess
 from cachetools import cached, LRUCache
 
-from utils import config_logger, load_dotenvs
+from .utils import config_logger, load_dotenvs
 
 logger = logging.getLogger(__name__)
 

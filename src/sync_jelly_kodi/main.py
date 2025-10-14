@@ -1,16 +1,17 @@
 import logging
 import os
-from jelly_util import JellySession, jelly_pull
-import jelly_util
-from kodi_util import kodi_pull
-import kodi_util
-from mongo_util import get_mongo_collection
-import utils
+from .jelly_util import JellySession, jelly_pull
+from . import jelly_util
+from .kodi_util import kodi_pull
+from . import kodi_util
+from .mongo_util import get_mongo_collection
+from . import utils
 from pathlib import Path
 from datetime import datetime
 
 
 logging.getLogger("pymongo").setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
 
 
 
@@ -68,9 +69,9 @@ def set_watch_from_kodi_to_jelly(kodi_watched_items:list[dict]):
 
 
 
-
-if __name__ == "__main__":
+def run_sync():
     utils.load_dotenvs()
+    utils.config_logger("jelly_kodi_sync.log",Path("./logs"))
     # - get data
     # run sync with jelly first
     # run kodi sync
@@ -81,8 +82,6 @@ if __name__ == "__main__":
     # find jelly items that match and update the position using ticks
     # -- sync jelly watch into kodi
     # do the same steps in reverse
-    utils.config_logger("jelly_kodi_sync.log",Path("./logs"))
-    logger = logging.getLogger(__name__)
     logger.info("Preflight check - is Kodi up...")
     try:
         kodi_conn = kodi_util.getKodi()
@@ -147,3 +146,7 @@ if __name__ == "__main__":
     logger.info(f"Step 8/8 completed in {step_end_time - step_start_time}")
 
     logger.info("Done")
+
+
+if __name__ == "__main__":
+    run_sync()

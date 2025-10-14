@@ -7,8 +7,8 @@ import json
 import os
 from pymongo.results import BulkWriteResult
 from pymongo import UpdateOne
-from mongo_util import get_mongo_collection
-from utils import convert_windows_to_unix_path, load_dotenvs
+from .mongo_util import get_mongo_collection
+from .utils import convert_windows_to_unix_path, load_dotenvs
 
 
 logger = logging.getLogger(__name__)
