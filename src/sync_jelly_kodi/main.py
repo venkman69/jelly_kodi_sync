@@ -1,6 +1,5 @@
 import logging
 import os
-import configparser
 from .jelly_util import JellySession, jelly_pull
 from . import jelly_util
 from .kodi_util import kodi_pull
@@ -12,19 +11,15 @@ from datetime import datetime
 import typer
 
 
+utils.load_dotenvs()
+log_dir = os.getenv("LOG_DIR", "./logs")
+log_file = os.getenv("LOG_FILE", "jelly_kodi_sync.log")
+utils.config_logger(log_file, Path(log_dir))
+
 app = typer.Typer()
 
 
 logger = logging.getLogger(__name__)
-
-
-def get_log_dir():
-    config = configparser.ConfigParser()
-    config_path = Path("config.ini")
-    if config_path.exists():
-        config.read(config_path)
-        return config.get("logging", "log_dir", fallback="./logs")
-    return "./logs"
 
 
 def set_watch_from_jelly_to_kodi(jelly_watched_items:list[dict]):
@@ -76,9 +71,6 @@ def set_watch_from_kodi_to_jelly(kodi_watched_items:list[dict]):
 
 @app.command()
 def pull_jelly():
-    utils.load_dotenvs()
-    log_dir = get_log_dir()
-    utils.config_logger("jelly_kodi_sync.log", Path(log_dir))
     jellyfin_url = os.getenv("JELLYFIN_URL")
     api_key = os.getenv("JELLYFIN_API_KEY")
     if not jellyfin_url or not api_key:
@@ -90,9 +82,6 @@ def pull_jelly():
 
 @app.command()
 def pull_kodi():
-    utils.load_dotenvs()
-    log_dir = get_log_dir()
-    utils.config_logger("jelly_kodi_sync.log", Path(log_dir))
     logger.info(f"Starting kodi data pull at {datetime.now()}")
     try:
         kodi_conn = kodi_util.getKodi()
@@ -107,9 +96,6 @@ def pull_kodi():
 
 @app.command()
 def sync():
-    utils.load_dotenvs()
-    log_dir = get_log_dir()
-    utils.config_logger("jelly_kodi_sync.log", Path(log_dir))
     # - get data
     # run sync with jelly first
     # run kodi sync

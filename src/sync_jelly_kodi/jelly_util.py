@@ -1,13 +1,16 @@
 import logging
 import re
+from turtle import position
 import requests
 from typing import Optional
 from urllib.parse import urljoin
 import json
 import os
-from pymongo.results import BulkWriteResult
-from pymongo import UpdateOne
-from .mongo_util import get_mongo_collection
+from .sqlite_util import (
+    upsert_jelly_items, get_watched_jelly_items,
+    find_jelly_items_by_file, get_all_jelly_item_ids,
+    delete_stale_jelly_items
+)
 from .utils import convert_windows_to_unix_path, load_dotenvs
 
 
@@ -64,8 +67,7 @@ def update_playback_position(
     user_id: str,
     item_id: str,
     position_ticks: int,
-    is_played: Optional[bool] = None,
-    play_count: Optional[int] = None,
+    play_count: int = 0,
 ) -> bool:
     """
         Updates the playback position for a media item on a Jellyfin/Emby server.
@@ -96,15 +98,20 @@ def update_playback_position(
     # Construct the JSON payload (Data Transfer Object)
     # The API endpoint expects a full or partial UserData DTO.
     # PlaybackPositionTicks is the critical field for saving progress.
-    payload = {
-        "PlaybackPositionTicks": position_ticks,
-    }
+    if play_count > 0 and position_ticks == 0:
+        # If play_count is set to a positive value and position is 0, we can infer that the item should be marked as played.
+        # otherwise don't set the Played to True.
+        payload = {
+            "PlaybackPositionTicks": position_ticks,
+            "PlayCount": play_count,
+            "Played": True,
+        }
+    else:    
+        payload = {
+            "PlaybackPositionTicks": position_ticks,
+            "PlayCount": play_count,
+        }
 
-    if is_played is not None:
-        payload["Played"] = is_played
-
-    if play_count is not None:
-        payload["PlayCount"] = play_count
 
     try:
         # Send the POST request to the API
@@ -135,7 +142,7 @@ def update_playback_position(
 
 def jelly_pull()->bool:
     """
-    Fetch all watch status of all items from Jellyfin server and save into mongodb
+    Fetch all watch status of all items from Jellyfin server and save into database
     """
     jellyfin_url = os.getenv("JELLYFIN_URL")
     api_key = os.getenv("JELLYFIN_API_KEY")
@@ -195,32 +202,19 @@ def get_root_file_path(path:str)->tuple:
 
 def sync_db(all_users_items: list[dict], jellyfin_item_ids: set[str]):
     """
-    Synchronizes the fetched Jellyfin items with the MongoDB database.
+    Synchronizes the fetched Jellyfin items with SQLite database.
     It upserts new/updated items and deletes stale items.
     """
-    JELLY_COLLECTION = os.getenv("JELLY_COLLECTION", "jellyitems")
-    mongo_collection = get_mongo_collection(JELLY_COLLECTION)
-
-    # 1. Upsert all items from Jellyfin into MongoDB
+    # 1. Upsert all items from Jellyfin into SQLite
+    matched_count = inserted_count = modified_count = 0
     if all_users_items:
-        operations = [
-            UpdateOne(
-                {"Id": item["Id"], "UserId": item["UserId"]},
-                {"$set": item},
-                upsert=True
-            )
-            for item in all_users_items
-        ]
-        result: BulkWriteResult = mongo_collection.bulk_write(operations)
-        if result.upserted_ids is not None:
-            logger.debug(f"Upserted items. Matched: {result.matched_count}, Upserted: {len(result.upserted_ids)}, Modified: {result.modified_count}")
+        matched_count, inserted_count, modified_count = upsert_jelly_items(all_users_items)
+        logger.debug(f"Upserted items. Matched: {matched_count}, Inserted: {inserted_count}, Modified: {modified_count}")
 
-    # 2. Delete items from MongoDB that are no longer in Jellyfin
-    mongo_items = mongo_collection.find({}, {"_id": 1, "Id": 1, "UserId": 1})
-    ids_to_delete = [item["_id"] for item in mongo_items if f"{item['UserId']}_{item['Id']}" not in jellyfin_item_ids]
-    if ids_to_delete:
-        delete_result = mongo_collection.delete_many({"_id": {"$in": ids_to_delete}})
-        logger.debug(f"Deleted {delete_result.deleted_count} stale items from MongoDB.")
+    # 2. Delete items from SQLite that are no longer in Jellyfin
+    current_ids = [(item["Id"], item["UserId"]) for item in all_users_items]
+    deleted_count = delete_stale_jelly_items(current_ids)
+    logger.debug(f"Deleted {deleted_count} stale items from Jellyfin DB.")
 
 
 def get_users(session) -> list[dict]:
@@ -240,16 +234,14 @@ def get_items(session: JellySession) -> list[dict]:
     return items
 
 
-def get_watched_items_from_mongo():
-    JELLY_COLLECTION = os.getenv("JELLY_COLLECTION", "jellyitems")
-    # TODO: add option to allow 'all' users and a list of users
-    JELLYFIN_SYNC_USER = os.getenv("JELLYFIN_SYNC_USER", "venkman")
-    mongo_collection = get_mongo_collection(JELLY_COLLECTION)
-    query={"UserName":JELLYFIN_SYNC_USER,"$or": [{"UserData.PlayCount": {"$gt": 0}}, {"UserData.PlaybackPositionTicks": {"$gt": 0}}]}
-    result = list(mongo_collection.find(query))
+def get_watched_items_from_db():
+    JELLYFIN_SYNC_USER = os.getenv("JELLYFIN_SYNC_USER")
+    if not JELLYFIN_SYNC_USER:
+        raise ValueError("JELLYFIN_SYNC_USER must be set in environment variables.")
+    result = get_watched_jelly_items(JELLYFIN_SYNC_USER)
     return result
 
-def sync_watch_status_to_jelly_from_kodi(kodi_item: dict, jelly_item: dict, session: JellySession):
+def sync_watch_status_from_kodi_to_jelly(kodi_item: dict, jelly_item: dict, session: JellySession):
     """
     Using the Jellyfin API, set the playcount and resume position in Jellyfin based on a Kodi item.
     """
@@ -263,13 +255,18 @@ def sync_watch_status_to_jelly_from_kodi(kodi_item: dict, jelly_item: dict, sess
     jelly_user_data = jelly_item.get("UserData", {})
     jelly_playcount = jelly_user_data.get("PlayCount", 0)
     jelly_resume_ticks = jelly_user_data.get("PlaybackPositionTicks", 0)
+    jelly_is_played = jelly_user_data.get("Played")
+
 
     # Convert Kodi seconds to Jellyfin ticks
     new_position_ticks = seconds_to_ticks(kodi_resume_seconds)
 
     # Check if an update is necessary to avoid redundant API calls
     position_diff_seconds = abs(kodi_resume_seconds - ticks_to_seconds(jelly_resume_ticks))
-    if kodi_playcount == jelly_playcount and position_diff_seconds < 2:
+    if kodi_playcount <= jelly_playcount and position_diff_seconds < 2 and jelly_is_played == (kodi_playcount > 0 and kodi_resume_seconds == 0):
+        # if kodi_playcount should be less than or equal to jelly_playcount
+        # position diff should be less than 2 seconds.
+        # jelly is played flag should match : if playcount > 0 AND resume_seconds == 0. Otherwise it is in progress - so played should be false.
         logger.debug(f"Watch status for '{jelly_item.get('Name')}' is already in sync. Skipping.")
         return
 
@@ -309,6 +306,7 @@ if __name__ == "__main__":
             anita_id = u["Id"]
 
     cra = "9ef0401d9b2ed05107e38a3d30904d51"  # crazy rich asians
+    epi = "ff142cbe86b10d1dfa851e83be42dca4" # sas rogue heroes S01 E01
     # "UserData": {"PlayedPercentage": 36.725314546682675, "PlaybackPositionTicks": 26586460287,
     #  "PlayCount": 2, "IsFavorite": false, "LastPlayedDate": "2022-01-04T23:49:52.0522607Z", 
     # "Played": false,

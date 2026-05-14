@@ -2,10 +2,12 @@ import re
 from kodipydent import Kodi
 import logging
 import os
-from pymongo.results import BulkWriteResult
-from pymongo import UpdateOne
 from . import jelly_util
-from .mongo_util import get_mongo_collection
+from .sqlite_util import (
+    upsert_kodi_items, get_watched_kodi_items,
+    find_kodi_items_by_file, get_all_kodi_item_ids,
+    delete_stale_kodi_items
+)
 from . import utils
 from pathlib import Path
 from cachetools import cached, LRUCache
@@ -123,41 +125,25 @@ def kodi_pull():
 
 def sync_db(all_users_items: list[dict], kodi_item_ids: set[str]):
     """
-    Synchronizes the fetched Kodi items with the MongoDB database.
+    Synchronizes the fetched Kodi items with SQLite database.
     It upserts new/updated items and deletes stale items.
     """
-    KODI_COLLECTION = os.getenv("KODI_COLLECTION", "kodiitems")
-    mongo_collection = get_mongo_collection(KODI_COLLECTION)
-
-    # 1. Upsert all items from Kodi into MongoDB
+    # 1. Upsert all items from Kodi into SQLite
+    matched_count = inserted_count = modified_count = 0
     if all_users_items:
-        operations = [
-            UpdateOne(
-                {"uniqueid": item["uniqueid"]},
-                {"$set": item},
-                upsert=True
-            )
-            for item in all_users_items
-        ]
-        result: BulkWriteResult = mongo_collection.bulk_write(operations)
-        if result.upserted_ids is not None:
-            print(f"Upserted items. Matched: {result.matched_count}, Upserted: {len(result.upserted_ids)}, Modified: {result.modified_count}")
+        matched_count, inserted_count, modified_count = upsert_kodi_items(all_users_items)
+        print(f"Upserted items. Matched: {matched_count}, Inserted: {inserted_count}, Modified: {modified_count}")
 
-    # 2. Delete items from MongoDB that are no longer in Kodi
-    mongo_items = mongo_collection.find({}, {"_id": 1, "uniqueid": 1})
-    ids_to_delete = [item["_id"] for item in mongo_items if item["uniqueid"] not in kodi_item_ids]
-    if ids_to_delete:
-        delete_result = mongo_collection.delete_many({"_id": {"$in": ids_to_delete}})
-        logger.info(f"Deleted {delete_result.deleted_count} stale items from Kodi DB.")
+    # 2. Delete items from SQLite that are no longer in Kodi
+    current_ids = [item["uniqueid"] for item in all_users_items]
+    deleted_count = delete_stale_kodi_items(current_ids)
+    logger.info(f"Deleted {deleted_count} stale items from Kodi DB.")
 
-def get_watched_items_from_mongo():
-    KODI_COLLECTION = os.getenv("KODI_COLLECTION", "kodiitems")
-    mongo_collection = get_mongo_collection(KODI_COLLECTION)
-    query={"$or": [{"playcount": {"$gt": 0}}, {"resume.position": {"$gt": 0}}]}
-    result = list(mongo_collection.find(query))
+def get_watched_items_from_db():
+    result = get_watched_kodi_items()
     return result
 
-def sync_watch_status_in_kodi_from_jelly(jelly_item:dict, kodi_item:dict):
+def sync_watch_status_from_jelly_to_kodi(jelly_item:dict, kodi_item:dict):
     """using kodi api set the playcount and resume.position in kodi based on jellyfin item"""
     dry_run = os.getenv("DRY_RUN", "false") == "true"
     mk = getKodi()

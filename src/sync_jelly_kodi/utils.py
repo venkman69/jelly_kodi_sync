@@ -26,7 +26,13 @@ def config_logger(log_file_name:str, log_file_dir:Path):
         root_logger.handlers.clear()
 
     # Configure root logger
-    root_logger.setLevel(logging.INFO)
+    LOG_LEVEL=os.getenv("LOG_LEVEL",None)
+    if LOG_LEVEL:
+        LOG_LEVEL = getattr(logging, LOG_LEVEL.upper())
+    else:
+        LOG_LEVEL = logging.INFO
+    root_logger.setLevel(LOG_LEVEL)
+    
     formatter = RelativePathFormatter("%(asctime)s %(levelname)s [%(name)s] [%(relativepath)s:%(funcName)s():%(lineno)d] %(message)s")
 
     # Add file handler

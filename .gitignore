@@ -6,3 +6,5 @@ venv
 __pycache__
 *.egg-info
 *.pyc
+# Added by ggshield
+.cache_ggshield
