@@ -1,0 +1,41 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Sync: Bidirectional",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "sync_jelly_kodi.main",
+            "args": [
+                "sync"
+            ],
+            "justMyCode": true,
+            "envFile": "${workspaceFolder}/.env"
+        },
+        {
+            "name": "Pull: Jellyfin",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "sync_jelly_kodi.main",
+            "args": [
+                "pull-jelly"
+            ],
+            "justMyCode": true,
+            "envFile": "${workspaceFolder}/.env"
+        },
+        {
+            "name": "Pull: Kodi",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "sync_jelly_kodi.main",
+            "args": [
+                "pull-kodi"
+            ],
+            "justMyCode": true,
+            "envFile": "${workspaceFolder}/.env"
+        }
+    ]
+}

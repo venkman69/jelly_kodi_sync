@@ -14,10 +14,12 @@ else
     exit 1
 fi
 export pidfile="./work/.$SCRIPTNAME.pid"
+
+echo "Args: $@"
+storing_args="$@"
 start_this() {
     . $PROJ_DIR/venv/bin/activate
-    uv sync
-    sync-jelly-kodi
+    sync-jelly-kodi $storing_args
 }
 
 start
