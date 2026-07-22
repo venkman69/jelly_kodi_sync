@@ -127,6 +127,22 @@ app, rt = fast_app(
     bodycls="bg-background text-foreground",
 )
 
+if URL_PREFIX:
+    # ASGI middleware that strips URL_PREFIX before routing so that routes
+    # defined as "/" and "/sync" etc. work whether or not the reverse proxy
+    # (e.g. Caddy) has already stripped the prefix.
+    _fh_app = app
+
+    async def app(scope, receive, send):  # noqa: F811
+        if scope["type"] in ("http", "websocket"):
+            path = scope.get("path", "")
+            if path == URL_PREFIX or path.startswith(URL_PREFIX + "/"):
+                scope = dict(scope)
+                scope["path"] = path[len(URL_PREFIX):] or "/"
+                if "raw_path" in scope:
+                    scope["raw_path"] = scope["path"].encode()
+        await _fh_app(scope, receive, send)
+
 
 def _row_id(current_file: str) -> str:
     """Stable DOM id for a movie row, derived from its filename."""
