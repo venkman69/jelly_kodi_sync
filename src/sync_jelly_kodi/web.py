@@ -136,40 +136,47 @@ def movie_row(m: dict, status: str = "", ok: bool | None = None) -> Tr:
     else:
         status_cell = Span(status)
 
-    form = Form(
-        Hidden(name="current_file", value=m["current_file"]),
-        Input(
-            name="proposed",
-            value=m["proposed"],
-            style="width:22rem",
-            placeholder="Title_(YEAR).ext",
-        ),
-        Button("🏷️", type="submit", title="Rename"),
-        hx_post="/rename",
-        hx_target=f"#{rid}",
-        hx_swap="outerHTML",
-    )
+    # Stable IDs for the two hidden forms so buttons outside them can reference via `form=`.
+    rename_fid = f"frename-{rid}"
+    delete_fid = f"fdelete-{rid}"
+    escaped = m["current_file"].replace("'", "\\'")
 
-    delete_btn = Form(
-        Hidden(name="current_file", value=m["current_file"]),
-        Button(
-            "🗑️",
-            type="submit",
-            title="Delete file and sidecars",
-            cls="btn-delete",
-            onclick="return confirm('Delete " + m["current_file"].replace("'", "\\'") + " and all its sidecars?')",
+    proposed_cell = Div(
+        # Input + stacked icon buttons in one flex row.
+        Div(
+            Input(
+                name="proposed",
+                value=m["proposed"],
+                placeholder="Title_(YEAR).ext",
+                form=rename_fid,
+                style="flex:1; min-width:0",
+            ),
+            Div(
+                Button("🏷️", type="submit", form=rename_fid, title="Rename",
+                       style="font-size:1rem; padding:0 0.2rem; line-height:1"),
+                Button("🗑️", type="submit", form=delete_fid,
+                       title="Delete file and sidecars", cls="btn-delete",
+                       style="font-size:1rem; padding:0 0.2rem; line-height:1",
+                       onclick=f"return confirm('Delete {escaped} and all its sidecars?')"),
+                style="display:flex; flex-direction:column; gap:2px; flex-shrink:0",
+            ),
+            style="display:flex; align-items:center; gap:0.3rem",
         ),
-        hx_post="/movie-delete",
-        hx_target=f"#{rid}",
-        hx_swap="outerHTML",
+        *flags,
+        # Invisible forms — wiring only; buttons reference them by id via `form=`.
+        Form(Hidden(name="current_file", value=m["current_file"]),
+             id=rename_fid, hx_post="/rename",
+             hx_target=f"#{rid}", hx_swap="outerHTML"),
+        Form(Hidden(name="current_file", value=m["current_file"]),
+             id=delete_fid, hx_post="/movie-delete",
+             hx_target=f"#{rid}", hx_swap="outerHTML"),
     )
 
     return Tr(
         Td(m["current_file"]),
         Td(m["title"] or "—"),
         Td(str(m["year"]) if m["year"] else "—"),
-        Td(form, *flags),
-        Td(delete_btn),
+        Td(proposed_cell),
         Td(status_cell),
         id=rid,
     )
@@ -202,7 +209,6 @@ def movies_table() -> Div:
                 Th("Jellyfin title"),
                 Th("Year"),
                 Th("Proposed name"),
-                Th(""),
                 Th("Status"),
             )
         ),
