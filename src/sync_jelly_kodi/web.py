@@ -20,6 +20,7 @@ from fasthtml.common import (
     Input,
     P,
     Span,
+    Style,
     Table,
     Tbody,
     Td,
@@ -40,7 +41,32 @@ utils.config_logger(
 )
 logger = logging.getLogger(__name__)
 
-app, rt = fast_app()
+# Spinner shown while a "Refresh from Jellyfin" request is in flight. HTMX hides
+# elements with class ``htmx-indicator`` by default and reveals them for the
+# duration of the request that names them via ``hx-indicator``.
+_spinner_css = Style(
+    """
+    .htmx-indicator {
+        display: none;
+        margin-left: 0.5rem;
+        vertical-align: middle;
+    }
+    .htmx-request .htmx-indicator,
+    .htmx-request.htmx-indicator { display: inline-flex; }
+    .spinner {
+        display: inline-block;
+        width: 1rem;
+        height: 1rem;
+        border: 2px solid #ccc;
+        border-top-color: #333;
+        border-radius: 50%;
+        animation: spin 0.6s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    """
+)
+
+app, rt = fast_app(hdrs=[_spinner_css])
 
 
 def _row_id(current_file: str) -> str:
@@ -102,7 +128,14 @@ def movies_table() -> Div:
             hx_post="/refresh",
             hx_target="#movies",
             hx_swap="outerHTML",
+            hx_indicator="#refresh-spinner",
             style="margin-left:1rem",
+        ),
+        Span(
+            Span(cls="spinner"),
+            Span(" Refreshing…", style="margin-left:0.4rem"),
+            id="refresh-spinner",
+            cls="htmx-indicator",
         ),
         style="margin-bottom:1rem",
     )
