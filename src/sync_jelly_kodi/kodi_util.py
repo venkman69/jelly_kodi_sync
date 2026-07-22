@@ -170,14 +170,16 @@ def sync_watch_status_from_jelly_to_kodi(jelly_item:dict, kodi_item:dict):
     elif "movieid" in kodi_item:
         movie_id = kodi_item["movieid"]
         if not dry_run:
-            jelly_is_played = jelly_item.get("played",False)
+            jelly_is_played = jelly_item.get("UserData", {}).get("Played", False)
+            logger.debug("sync_watch_status_from_jelly_to_kodi: '%s' Played=%s PlayCount=%s resume_ticks=%s -> resume_secs=%.1f",
+                         kodi_item.get("title"), jelly_is_played, playcount,
+                         jelly_item["UserData"]["PlaybackPositionTicks"], resume_position_in_seconds)
             if not jelly_is_played:
                 if resume_position_in_seconds > 0:
                     mk.VideoLibrary.SetMovieDetails(movieid=movie_id,
                         playcount=playcount, resume={"position": resume_position_in_seconds})
                 else:
-                    logger.debug(f"Not updating {kodi_item['title']} as it is not played and has no resume position.")
-                    # don't 
+                    logger.debug("Not updating '%s': Played=False and no resume position — nothing to set.", kodi_item.get("title"))
             else:
                 mk.VideoLibrary.SetMovieDetails(movieid=movie_id,
                     playcount=playcount, resume={"position": resume_position_in_seconds})
