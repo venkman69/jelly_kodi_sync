@@ -21,6 +21,7 @@ from fasthtml.common import (
     Hr,
     Input,
     Li,
+    Meta,
     Ol,
     P,
     Span,
@@ -61,6 +62,8 @@ logger = logging.getLogger(__name__)
 # duration of the request that names them via ``hx-indicator``.
 _spinner_css = Style(
     """
+    *, *::before, *::after { box-sizing: border-box; }
+    body { max-width: 960px; margin: 0 auto; padding: 0.5rem 0.75rem; }
     .tab-link {
         padding: 0.5rem 1.2rem;
         text-decoration: none;
@@ -68,6 +71,7 @@ _spinner_css = Style(
         font-weight: 500;
         border-bottom: 3px solid transparent;
         color: #555;
+        white-space: nowrap;
     }
     .tab-link.active {
         font-weight: bold;
@@ -85,6 +89,7 @@ _spinner_css = Style(
         font-size: 1.1rem;
         padding: 0 0.3rem;
         opacity: 0.6;
+        min-height: 36px;
     }
     .btn-delete:hover { opacity: 1; }
     .htmx-indicator {
@@ -104,10 +109,48 @@ _spinner_css = Style(
         animation: spin 0.6s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+    /* Staleness panel — wraps on narrow screens */
+    #staleness { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; align-items: center; }
+    /* Table wrapper — horizontal scroll fallback for very small screens */
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    /* Responsive card layout for the movie table */
+    @media (max-width: 640px) {
+        .tab-link { padding: 0.5rem 0.75rem; font-size: 0.9rem; }
+        button { min-height: 40px; }
+        .table-scroll table,
+        .table-scroll thead,
+        .table-scroll tbody,
+        .table-scroll tr,
+        .table-scroll td { display: block; width: 100%; }
+        .table-scroll thead { display: none; }
+        .table-scroll tr {
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            margin-bottom: 0.75rem;
+            padding: 0.5rem 0.75rem;
+        }
+        .table-scroll td { padding: 0.25rem 0; }
+        .table-scroll td::before {
+            content: attr(data-label);
+            display: block;
+            font-size: 0.7rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            color: #888;
+            margin-bottom: 0.1rem;
+        }
+    }
+    @media (prefers-color-scheme: dark) and (max-width: 640px) {
+        .table-scroll tr { border-color: #444; }
+        .table-scroll td::before { color: #aaa; }
+    }
     """
 )
 
-app, rt = fast_app(hdrs=[_spinner_css])
+app, rt = fast_app(hdrs=[
+    Meta(name="viewport", content="width=device-width, initial-scale=1"),
+    _spinner_css,
+])
 
 
 def _row_id(current_file: str) -> str:
@@ -173,11 +216,11 @@ def movie_row(m: dict, status: str = "", ok: bool | None = None) -> Tr:
     )
 
     return Tr(
-        Td(m["current_file"]),
-        Td(m["title"] or "—"),
-        Td(str(m["year"]) if m["year"] else "—"),
-        Td(proposed_cell),
-        Td(status_cell),
+        Td(m["current_file"], data_label="Current filename"),
+        Td(m["title"] or "—", data_label="Jellyfin title"),
+        Td(str(m["year"]) if m["year"] else "—", data_label="Year"),
+        Td(proposed_cell, data_label="Proposed name"),
+        Td(status_cell, data_label="Status"),
         id=rid,
     )
 
@@ -192,7 +235,6 @@ def movies_table() -> Div:
             hx_target="#movies",
             hx_swap="outerHTML",
             hx_indicator="#refresh-spinner",
-            style="margin-left:1rem",
         ),
         Span(
             Span(cls="spinner"),
@@ -200,19 +242,22 @@ def movies_table() -> Div:
             id="refresh-spinner",
             cls="htmx-indicator",
         ),
-        style="margin-bottom:1rem",
+        style="display:flex; flex-wrap:wrap; align-items:center; gap:0.5rem; margin-bottom:1rem",
     )
-    table = Table(
-        Thead(
-            Tr(
-                Th("Current filename"),
-                Th("Jellyfin title"),
-                Th("Year"),
-                Th("Proposed name"),
-                Th("Status"),
-            )
+    table = Div(
+        Table(
+            Thead(
+                Tr(
+                    Th("Current filename"),
+                    Th("Jellyfin title"),
+                    Th("Year"),
+                    Th("Proposed name"),
+                    Th("Status"),
+                )
+            ),
+            Tbody(*[movie_row(m) for m in movies]),
         ),
-        Tbody(*[movie_row(m) for m in movies]),
+        cls="table-scroll",
     )
     return Div(header, table, id="movies")
 
@@ -256,12 +301,11 @@ def staleness_panel(oob: bool = False) -> Div:
     times = get_last_pull_times()
     extra = {"hx_swap_oob": "true"} if oob else {}
     return Div(
-        Strong("Data freshness — "),
-        Span("Kodi last pulled: "),
-        Strong(_fmt_ts(times["kodi"])),
-        Span("     Jellyfin last pulled: ", style="margin-left:1rem"),
-        Strong(_fmt_ts(times["jelly"])),
-        Span("   (UTC)", style="color:#888"),
+        Span(Span("Kodi last pulled: "), Strong(_fmt_ts(times["kodi"])),
+             style="white-space:nowrap"),
+        Span(Span("Jellyfin last pulled: "), Strong(_fmt_ts(times["jelly"])),
+             style="white-space:nowrap"),
+        Span("(UTC)", style="color:#888; white-space:nowrap"),
         id="staleness",
         style="padding:0.6rem; background:#f4f4f4; border-radius:4px; margin-bottom:1.5rem",
         **extra,
