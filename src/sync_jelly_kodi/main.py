@@ -1,10 +1,10 @@
 import logging
 import os
-from .jelly_util import JellySession, jelly_pull
+from .jelly_util import jelly_pull
 from . import jelly_util
 from .kodi_util import kodi_pull
 from . import kodi_util
-from .sqlite_util import find_kodi_items_by_file, find_jelly_items_by_file
+from .sync_ops import set_watch_from_jelly_to_kodi, set_watch_from_kodi_to_jelly
 from . import utils
 from pathlib import Path
 from datetime import datetime
@@ -20,53 +20,6 @@ app = typer.Typer()
 
 
 logger = logging.getLogger(__name__)
-
-
-def set_watch_from_jelly_to_kodi(jelly_watched_items:list[dict]):
-    found_counter=0
-    for item in jelly_watched_items:
-        # find this item from db
-        file_location = item["unified_file"]
-        found_items = find_kodi_items_by_file(file_location)
-        if len(found_items) > 1:
-            logger.warning("More than one match")
-            found_counter+=1
-            for found_item in found_items:
-                logger.debug(f"Found: {file_location}")
-        elif len(found_items) == 1:
-            logger.debug(f"Found: {file_location}")
-            found_counter+=1
-            kodi_util.sync_watch_status_from_jelly_to_kodi(item, found_items[0])
-        else:
-            logger.debug(f"No match found: {file_location}")
-    logger.info(f"Found {found_counter} Kodi items out of {len(jelly_watched_items)} JellyFin items in kodi")
-
-def set_watch_from_kodi_to_jelly(kodi_watched_items:list[dict]):
-    jellyfin_url = os.getenv("JELLYFIN_URL")
-    api_key = os.getenv("JELLYFIN_API_KEY")
-    if not jellyfin_url or not api_key:
-        raise ValueError("JELLYFIN_URL and JELLYFIN_API_KEY must be set in environment variables.")
-    session = JellySession(jellyfin_url, api_key)
-    found_counter=0
-    for item in kodi_watched_items:
-        # find this item from db
-        file_location = item.get("unified_file")
-        if not file_location:
-            logger.warning(f"Kodi item '{item.get('title')}' is missing 'unified_file', skipping.")
-            continue
-
-        found_items = find_jelly_items_by_file(file_location)
-
-        if found_items:
-            logger.debug(f"Found {len(found_items)} match(es) in Jellyfin for Kodi item: {file_location}")
-            found_counter += len(found_items)
-            # A single Kodi item can match against multiple Jellyfin users' libraries. Sync all.
-            for found_item in found_items:
-                jelly_util.sync_watch_status_from_kodi_to_jelly(item, found_item, session)
-        else:
-            logger.debug(f"No Jellyfin match found for Kodi item: {file_location}")
-
-    logger.info(f"Found {found_counter} Jellyfin items out of {len(kodi_watched_items)} Kodi items in JellyFin.")
 
 
 @app.command()

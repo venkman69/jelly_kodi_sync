@@ -12,14 +12,19 @@ import os
 from pathlib import Path
 
 from fasthtml.common import (
+    A,
     Button,
     Div,
     Form,
-    H1,
+    H2,
     Hidden,
+    Hr,
     Input,
+    Li,
+    Ol,
     P,
     Span,
+    Strong,
     Style,
     Table,
     Tbody,
@@ -33,6 +38,14 @@ from fasthtml.common import (
 
 from . import jelly_util, utils
 from .movie_rename import get_transcoded_movies, rename_movie
+from .sqlite_util import get_last_pull_times
+from .sync_ops import (
+    AUTO_STEPS,
+    pull_jelly_step,
+    pull_kodi_step,
+    push_jelly_to_kodi_step,
+    push_kodi_to_jelly_step,
+)
 
 utils.load_dotenvs()
 utils.config_logger(
@@ -46,6 +59,23 @@ logger = logging.getLogger(__name__)
 # duration of the request that names them via ``hx-indicator``.
 _spinner_css = Style(
     """
+    .tab-link {
+        padding: 0.5rem 1.2rem;
+        text-decoration: none;
+        font-size: 1rem;
+        font-weight: 500;
+        border-bottom: 3px solid transparent;
+        color: #555;
+    }
+    .tab-link.active {
+        font-weight: bold;
+        border-bottom-color: currentColor;
+        color: #111;
+    }
+    @media (prefers-color-scheme: dark) {
+        .tab-link        { color: #aaa; }
+        .tab-link.active { color: #fff; }
+    }
     .htmx-indicator {
         display: none;
         margin-left: 0.5rem;
@@ -154,9 +184,197 @@ def movies_table() -> Div:
     return Div(header, table, id="movies")
 
 
+def tab_nav(active: str) -> Div:
+    """Top navigation shared by every tab; highlights the active one."""
+
+    def tab(label: str, href: str, key: str) -> A:
+        cls = "tab-link active" if active == key else "tab-link"
+        return A(label, href=href, cls=cls)
+
+    return Div(
+        tab("Movie Renamer", "/", "renamer"),
+        tab("Jelly-Kodi Sync", "/sync", "sync"),
+        style="display:flex; gap:0.5rem; border-bottom:1px solid #ccc; margin-bottom:1.5rem",
+    )
+
+
+def page(active: str, *content) -> Titled:
+    return Titled("Jelly-Kodi Sync", tab_nav(active), *content)
+
+
 @rt("/")
 def index():
-    return Titled("TRANSCODED movie renamer", movies_table())
+    return page("renamer", movies_table())
+
+
+# --- Jelly-Kodi Sync tab ----------------------------------------------------------
+
+
+def _fmt_ts(ts: str | None) -> str:
+    return ts if ts else "never"
+
+
+def staleness_panel(oob: bool = False) -> Div:
+    """Show when each side's data was last pulled, so the user can judge staleness.
+
+    When ``oob`` is set, the panel replaces the existing ``#staleness`` element via
+    an out-of-band swap after a pull refreshes the data.
+    """
+    times = get_last_pull_times()
+    extra = {"hx_swap_oob": "true"} if oob else {}
+    return Div(
+        Strong("Data freshness — "),
+        Span("Kodi last pulled: "),
+        Strong(_fmt_ts(times["kodi"])),
+        Span("     Jellyfin last pulled: ", style="margin-left:1rem"),
+        Strong(_fmt_ts(times["jelly"])),
+        Span("   (UTC)", style="color:#888"),
+        id="staleness",
+        style="padding:0.6rem; background:#f4f4f4; border-radius:4px; margin-bottom:1.5rem",
+        **extra,
+    )
+
+
+def _tick(ok: bool, label: str, msg: str) -> P:
+    mark, color = ("✓", "#080") if ok else ("✗", "#b00")
+    return P(
+        Span(f"{mark} ", style=f"color:{color}"),
+        Strong(label),
+        f" — {msg}",
+        style=f"margin:0.2rem 0;{'' if ok else ' color:#b00;'}",
+    )
+
+
+def _pending(idx: int) -> Div:
+    """A self-firing placeholder that runs auto-step ``idx`` once inserted.
+
+    ``hx_trigger=load`` posts to the step endpoint the moment this lands in the DOM,
+    and the response replaces this element (outerHTML) with the step's tick + the
+    next pending placeholder — chaining the steps sequentially without SSE.
+    """
+    label = AUTO_STEPS[idx][0]
+    return Div(
+        Span(cls="spinner"),
+        Span(f" {label}…", style="margin-left:0.4rem"),
+        id=f"auto-pending-{idx}",
+        hx_post=f"/sync/auto/{idx}",
+        hx_trigger="load",
+        hx_target=f"#auto-pending-{idx}",
+        hx_swap="outerHTML",
+        style="margin:0.3rem 0",
+    )
+
+
+def sync_tab() -> Div:
+    auto_section = Div(
+        H2("Auto Sync"),
+        P("Runs the full sync in order; each step starts only after the previous one succeeds:"),
+        Ol(*[Li(label) for label, _ in AUTO_STEPS]),
+        Button(
+            "Auto Sync",
+            hx_post="/sync/auto/0",
+            hx_target="#auto-results",
+            hx_swap="innerHTML",
+        ),
+        Div(id="auto-results", style="margin-top:1rem"),
+    )
+    manual_section = Div(
+        H2("Manual Controls"),
+        P(
+            "Pull each side first (check the freshness above), then push in the "
+            "direction you want. Pushes compare whatever is currently in the database."
+        ),
+        Div(
+            Button(
+                "Pull from Kodi",
+                hx_post="/sync/pull-kodi",
+                hx_target="#manual-result",
+                hx_swap="innerHTML",
+                hx_indicator="#manual-spinner",
+            ),
+            Button(
+                "Pull from Jellyfin",
+                hx_post="/sync/pull-jelly",
+                hx_target="#manual-result",
+                hx_swap="innerHTML",
+                hx_indicator="#manual-spinner",
+            ),
+            Button(
+                "Compare & push to Jellyfin",
+                hx_post="/sync/push-jelly",
+                hx_target="#manual-result",
+                hx_swap="innerHTML",
+                hx_indicator="#manual-spinner",
+            ),
+            Button(
+                "Compare & push to Kodi",
+                hx_post="/sync/push-kodi",
+                hx_target="#manual-result",
+                hx_swap="innerHTML",
+                hx_indicator="#manual-spinner",
+            ),
+            style="display:flex; flex-wrap:wrap; gap:0.5rem",
+        ),
+        Span(
+            Span(cls="spinner"),
+            Span(" Working…", style="margin-left:0.4rem"),
+            id="manual-spinner",
+            cls="htmx-indicator",
+        ),
+        Div(id="manual-result", style="margin-top:1rem"),
+    )
+    return Div(staleness_panel(), auto_section, Hr(), manual_section)
+
+
+@rt("/sync")
+def sync_page():
+    return page("sync", sync_tab())
+
+
+@rt("/sync/auto/{idx}")
+def sync_auto(idx: int):
+    label, func = AUTO_STEPS[idx]
+    ok, msg = func()
+    parts = [_tick(ok, label, msg)]
+    if ok and idx + 1 < len(AUTO_STEPS):
+        parts.append(_pending(idx + 1))
+    elif ok:
+        parts.append(
+            P("✓ Auto-sync complete.", style="color:#080; font-weight:bold; margin-top:0.5rem")
+        )
+    else:
+        parts.append(
+            P("✗ Sync halted.", style="color:#b00; font-weight:bold; margin-top:0.5rem")
+        )
+    # A pull step changes freshness; refresh the staleness panel out-of-band.
+    parts.append(staleness_panel(oob=True))
+    return tuple(parts)
+
+
+@rt("/sync/pull-kodi")
+def sync_pull_kodi():
+    ok, msg = pull_kodi_step()
+    return _tick(ok, "Pull from Kodi", msg), staleness_panel(oob=True)
+
+
+@rt("/sync/pull-jelly")
+def sync_pull_jelly():
+    ok, msg = pull_jelly_step()
+    return _tick(ok, "Pull from Jellyfin", msg), staleness_panel(oob=True)
+
+
+@rt("/sync/push-jelly")
+def sync_push_jelly():
+    # "push to Jellyfin" = write Kodi's watch status into Jellyfin.
+    ok, msg = push_kodi_to_jelly_step()
+    return _tick(ok, "Compare & push to Jellyfin", msg)
+
+
+@rt("/sync/push-kodi")
+def sync_push_kodi():
+    # "push to Kodi" = write Jellyfin's watch status into Kodi.
+    ok, msg = push_jelly_to_kodi_step()
+    return _tick(ok, "Compare & push to Kodi", msg)
 
 
 @rt("/rename")

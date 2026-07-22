@@ -259,6 +259,25 @@ def get_watched_kodi_items() -> List[Dict[str, Any]]:
     return results
 
 
+def get_last_pull_times() -> Dict[str, Optional[str]]:
+    """Return the most recent ``last_updated`` per source table.
+
+    Used by the sync UI to show data staleness ("Kodi last pulled: ..."). Values are
+    SQLite ``CURRENT_TIMESTAMP`` strings (UTC), or ``None`` if the table is empty.
+    """
+    conn = get_sqlite_connection()
+    cursor = conn.cursor()
+    out: Dict[str, Optional[str]] = {}
+    for label, table in (("jelly", "jellyitems"), ("kodi", "kodiitems")):
+        try:
+            cursor.execute(f"SELECT MAX(last_updated) FROM {table}")
+            row = cursor.fetchone()
+            out[label] = row[0] if row else None
+        except sqlite3.OperationalError:
+            out[label] = None
+    return out
+
+
 def find_kodi_items_by_file(file_path: str) -> List[Dict[str, Any]]:
     """
     Find Kodi items by unified_file path
