@@ -348,7 +348,7 @@ def sync_tab() -> Div:
         P("Runs the full sync in order; each step starts only after the previous one succeeds:"),
         Ol(*[Li(label) for label, _ in AUTO_STEPS]),
         Button(
-            "Auto Sync",
+            "↔️ Sync",
             hx_post="/sync/auto/0",
             hx_target="#auto-results",
             hx_swap="innerHTML",
@@ -363,28 +363,28 @@ def sync_tab() -> Div:
         ),
         Div(
             Button(
-                "Pull from Kodi",
+                "📥 from Kodi",
                 hx_post="/sync/pull-kodi",
                 hx_target="#manual-result",
                 hx_swap="innerHTML",
                 hx_indicator="#manual-spinner",
             ),
             Button(
-                "Pull from Jellyfin",
+                "📥 from Jellyfin",
                 hx_post="/sync/pull-jelly",
                 hx_target="#manual-result",
                 hx_swap="innerHTML",
                 hx_indicator="#manual-spinner",
             ),
             Button(
-                "Compare & push to Jellyfin",
+                "🔀 to Jellyfin",
                 hx_post="/sync/push-jelly",
                 hx_target="#manual-result",
                 hx_swap="innerHTML",
                 hx_indicator="#manual-spinner",
             ),
             Button(
-                "Compare & push to Kodi",
+                "🔀 to Kodi",
                 hx_post="/sync/push-kodi",
                 hx_target="#manual-result",
                 hx_swap="innerHTML",
@@ -394,14 +394,14 @@ def sync_tab() -> Div:
         ),
         Div(
             Button(
-                "Refresh Kodi library",
+                "🔄 Kodi library",
                 hx_post="/sync/refresh-kodi-library",
                 hx_target="#manual-result",
                 hx_swap="innerHTML",
                 hx_indicator="#manual-spinner",
             ),
             Button(
-                "Refresh Jellyfin library",
+                "🔄 Jellyfin library",
                 hx_post="/sync/refresh-jelly-library",
                 hx_target="#manual-result",
                 hx_swap="innerHTML",
@@ -448,39 +448,39 @@ def sync_auto(idx: int):
 @rt("/sync/pull-kodi")
 def sync_pull_kodi():
     ok, msg = pull_kodi_step()
-    return _tick(ok, "Pull from Kodi", msg), staleness_panel(oob=True)
+    return _tick(ok, "📥 from Kodi", msg), staleness_panel(oob=True)
 
 
 @rt("/sync/pull-jelly")
 def sync_pull_jelly():
     ok, msg = pull_jelly_step()
-    return _tick(ok, "Pull from Jellyfin", msg), staleness_panel(oob=True)
+    return _tick(ok, "📥 from Jellyfin", msg), staleness_panel(oob=True)
 
 
 @rt("/sync/refresh-kodi-library")
 def sync_refresh_kodi_library():
     ok, msg = kodi_library_scan_step()
-    return _tick(ok, "Refresh Kodi library", msg)
+    return _tick(ok, "🔄 Kodi library", msg)
 
 
 @rt("/sync/refresh-jelly-library")
 def sync_refresh_jelly_library():
     ok, msg = jelly_library_refresh_step()
-    return _tick(ok, "Refresh Jellyfin library", msg)
+    return _tick(ok, "🔄 Jellyfin library", msg)
 
 
 @rt("/sync/push-jelly")
 def sync_push_jelly():
     # "push to Jellyfin" = write Kodi's watch status into Jellyfin.
     ok, msg = push_kodi_to_jelly_step()
-    return _tick(ok, "Compare & push to Jellyfin", msg)
+    return _tick(ok, "🔀 to Jellyfin", msg)
 
 
 @rt("/sync/push-kodi")
 def sync_push_kodi():
     # "push to Kodi" = write Jellyfin's watch status into Kodi.
     ok, msg = push_jelly_to_kodi_step()
-    return _tick(ok, "Compare & push to Kodi", msg)
+    return _tick(ok, "🔀 to Kodi", msg)
 
 
 @rt("/rename")
