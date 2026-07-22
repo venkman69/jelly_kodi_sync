@@ -57,6 +57,10 @@ def movie_row(m: dict, status: str = "", ok: bool | None = None) -> Tr:
         flags.append(Span(" ⚠ no Jellyfin year", style="color:#b00"))
     if not m["exists_on_disk"]:
         flags.append(Span(" ⚠ not found on disk", style="color:#b00"))
+    if m.get("collision"):
+        flags.append(
+            Span(" ⚠ name conflict (duplicate target)", style="color:#b00")
+        )
 
     if ok is True:
         status_cell = Span(f"✓ {status}", style="color:#080")
