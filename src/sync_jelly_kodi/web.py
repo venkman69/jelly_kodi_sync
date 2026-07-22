@@ -58,6 +58,8 @@ utils.config_logger(
 )
 logger = logging.getLogger(__name__)
 
+URL_PREFIX = os.getenv("URL_PREFIX", "").rstrip("/")
+
 # Only what FrankenUI/Tailwind can't handle: HTMX indicator + mobile table cards.
 _htmx_css = Style(
     """
@@ -102,11 +104,24 @@ _htmx_css = Style(
     """
 )
 
+def _prefix_script():
+    if not URL_PREFIX:
+        return ()
+    return (Script(f"""
+        document.addEventListener("htmx:configRequest", function(evt) {{
+            if (evt.detail.path.startsWith("/")) {{
+                evt.detail.path = "{URL_PREFIX}" + evt.detail.path;
+            }}
+        }});
+    """),)
+
+
 app, rt = fast_app(
     hdrs=(
         Meta(name="viewport", content="width=device-width, initial-scale=1"),
         *Theme.slate.headers(),
         _htmx_css,
+        *_prefix_script(),
     ),
     bodycls="bg-background text-foreground",
 )
@@ -238,8 +253,8 @@ def tab_nav(active: str) -> Div:
         return A(label, href=href, cls=cls)
 
     return Div(
-        tab("Movie Renamer", "/", "renamer"),
-        tab("Jelly-Kodi Sync", "/sync", "sync"),
+        tab("Movie Renamer", f"{URL_PREFIX}/", "renamer"),
+        tab("Jelly-Kodi Sync", f"{URL_PREFIX}/sync", "sync"),
         cls="flex gap-1 border-b border-border mb-6",
     )
 
