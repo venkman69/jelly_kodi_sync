@@ -13,6 +13,7 @@ from pathlib import Path
 
 from fasthtml.common import (
     A,
+    Button as HtmlButton,
     Div,
     Form,
     H2,
@@ -149,16 +150,17 @@ def movie_row(m: dict, status: str = "", ok: bool | None = None) -> Tr:
                 cls="uk-input flex-1 min-w-0",
             ),
             Div(
-                Button(
-                    UkIcon("tag", cls="h-4 w-4"),
+                HtmlButton(
+                    "🧹",
                     type="submit", form=rename_fid, title="Rename",
-                    cls="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground",
+                    style="background:none;border:none;padding:3px;cursor:pointer;font-size:0.85rem;line-height:1",
+                    onclick=f"var p=this.form&&this.form.elements['proposed'];return confirm('Rename {escaped} → ' + (p?p.value:'the proposed name') + '?')",
                 ),
-                Button(
-                    UkIcon("trash-2", cls="h-4 w-4"),
+                HtmlButton(
+                    UkIcon("trash-2", cls="h-3 w-3"),
                     type="submit", form=delete_fid,
                     title="Delete file and sidecars",
-                    cls="p-1 rounded hover:bg-accent text-destructive",
+                    style="background:none;border:none;padding:3px;cursor:pointer;color:#f87171;line-height:1",
                     onclick=f"return confirm('Delete {escaped} and all its sidecars?')",
                 ),
                 cls="flex flex-col gap-0.5 flex-shrink-0",
