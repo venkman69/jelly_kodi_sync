@@ -128,20 +128,12 @@ app, rt = fast_app(
 )
 
 if URL_PREFIX:
-    # ASGI middleware that strips URL_PREFIX before routing so that routes
-    # defined as "/" and "/sync" etc. work whether or not the reverse proxy
-    # (e.g. Caddy) has already stripped the prefix.
-    _fh_app = app
+    # Wrap rt so every @rt("/foo") registers at URL_PREFIX + "/foo".
+    # Routes live at the prefixed paths; no stripping needed anywhere.
+    _rt_orig = rt
 
-    async def app(scope, receive, send):  # noqa: F811
-        if scope["type"] in ("http", "websocket"):
-            path = scope.get("path", "")
-            if path == URL_PREFIX or path.startswith(URL_PREFIX + "/"):
-                scope = dict(scope)
-                scope["path"] = path[len(URL_PREFIX):] or "/"
-                if "raw_path" in scope:
-                    scope["raw_path"] = scope["path"].encode()
-        await _fh_app(scope, receive, send)
+    def rt(path="", *args, **kwargs):  # noqa: F811
+        return _rt_orig(URL_PREFIX + path, *args, **kwargs)
 
 
 def _row_id(current_file: str) -> str:
