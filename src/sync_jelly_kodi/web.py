@@ -379,7 +379,9 @@ def sync_push_kodi():
 
 @rt("/rename")
 def rename(current_file: str, proposed: str):
+    logger.debug("/rename: request received current_file='%s' proposed='%s'", current_file, proposed)
     ok, message = rename_movie(current_file, proposed)
+    logger.debug("/rename: result ok=%s message='%s'", ok, message)
     # Rebuild the row so its state (new filename / on-disk flag) reflects the result.
     if ok:
         m = {

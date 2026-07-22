@@ -7,8 +7,11 @@ not need to import the sibling `kodidash` package. The canonical movie name is:
 
 e.g. ``The_Matrix_(1999).mkv``.
 """
+import logging
 import os
 import re
+
+logger = logging.getLogger(__name__)
 
 # Matches a Kodi-style filename stem: <title>_(YEAR)
 # e.g. "The_Matrix_(1999)" -> title "The_Matrix", year "1999".
@@ -27,9 +30,19 @@ def is_kodi_named(filename: str) -> bool:
     stem, _ext = os.path.splitext(filename)
     match = KODI_NAME_RE.fullmatch(stem)
     if not match:
+        logger.debug("is_kodi_named('%s'): stem '%s' does not match Title_(YEAR) pattern -> False", filename, stem)
         return False
     title_part = match.group(1)
-    return windows_compatible_title(title_part) == title_part
+    canonical = windows_compatible_title(title_part)
+    result = canonical == title_part
+    if result:
+        logger.debug("is_kodi_named('%s'): stem matches pattern, title_part '%s' is already canonical -> True", filename, title_part)
+    else:
+        logger.debug(
+            "is_kodi_named('%s'): stem matches pattern but title_part '%s' != canonical '%s' -> False (would be renamed)",
+            filename, title_part, canonical,
+        )
+    return result
 
 
 def windows_compatible_title(title: str) -> str:
@@ -40,12 +53,15 @@ def windows_compatible_title(title: str) -> str:
     """
     if not title:
         return ""
+    original = title
     moviename = title.strip().replace(" ", "_")
     moviename = moviename.replace("'", "")
     moviename = moviename.replace(":", "_")
     moviename = moviename.replace("__", "_")
     moviename = moviename.replace("?", "")
     moviename = moviename.replace(",", "")
+    if moviename != original:
+        logger.debug("windows_compatible_title: '%s' -> '%s'", original, moviename)
     return moviename
 
 
@@ -56,4 +72,6 @@ def proposed_filename(title: str, year, ext: str) -> str:
     """
     safe_title = windows_compatible_title(title)
     ext = ext.lstrip(".")
-    return f"{safe_title}_({year}).{ext}"
+    result = f"{safe_title}_({year}).{ext}"
+    logger.debug("proposed_filename: title='%s' year=%s ext='%s' -> '%s'", title, year, ext, result)
+    return result
