@@ -6,9 +6,11 @@ SCRIPT_DIR=$(dirname "$0")
 PROJ_DIR=$(dirname "$SCRIPT_DIR")
 cd "$PROJ_DIR" || exit 1
 
+export PATH=$PATH:~/.local/bin
+
 set -a
 . "$PROJ_DIR/.env"
-. "$PROJ_DIR/.credentials"
+[ -f "$PROJ_DIR/.credentials" ] && . "$PROJ_DIR/.credentials"
 set +a
 
 exec uv run sync-jelly-kodi web --port "${WEB_PORT:-5001}" --host "${WEB_HOST:-0.0.0.0}" "$@"
