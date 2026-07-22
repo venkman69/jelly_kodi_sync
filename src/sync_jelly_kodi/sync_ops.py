@@ -100,10 +100,7 @@ def kodi_library_scan_step() -> tuple[bool, str]:
 
 def jelly_library_refresh_step() -> tuple[bool, str]:
     try:
-        ok = jelly_library_refresh()
-        if ok:
-            return True, "Jellyfin library refresh triggered"
-        return False, "Jellyfin library refresh returned unexpected response"
+        return jelly_library_refresh()
     except Exception as e:  # noqa: BLE001
         logger.exception("Jellyfin library refresh failed")
         return False, f"Jellyfin library refresh failed: {e}"

@@ -140,24 +140,60 @@ def update_playback_position(
         return False
 
 
-def jelly_library_refresh() -> bool:
-    """Trigger a full Jellyfin library refresh (POST /Library/Refresh).
+def _get_virtual_folder_item_id(session: JellySession, library_name: str) -> str | None:
+    """Return the ItemId for a Jellyfin virtual folder (library) by name, or None."""
+    response = session.get("/Library/VirtualFolders")
+    response.raise_for_status()
+    folders = response.json()
+    logger.debug("_get_virtual_folder_item_id: found %d virtual folder(s)", len(folders))
+    for folder in folders:
+        if folder.get("Name") == library_name:
+            item_id = folder.get("ItemId")
+            logger.debug("_get_virtual_folder_item_id: matched '%s' -> ItemId=%s", library_name, item_id)
+            return item_id
+    logger.warning("_get_virtual_folder_item_id: no virtual folder named '%s' found", library_name)
+    return None
 
-    This is a fire-and-forget call — Jellyfin queues the scan asynchronously
-    and returns immediately. A 204 response means the request was accepted.
+
+def jelly_library_refresh() -> tuple[bool, str]:
+    """Trigger a targeted Jellyfin scan of the TRANSCODED library (MoviesNew by default).
+
+    Looks up the library's ItemId via GET /Library/VirtualFolders, then calls
+    POST /Items/{id}/Refresh?Recursive=true which scans only that library.
+    Falls back to a full POST /Library/Refresh if the named library is not found.
+
+    The library name is controlled by the JELLYFIN_TRANSCODED_LIBRARY env var
+    (default: "MoviesNew").
+
+    Returns (success, message).
     """
+    library_name = os.getenv("JELLYFIN_TRANSCODED_LIBRARY", "MoviesNew")
     jellyfin_url = os.getenv("JELLYFIN_URL")
     api_key = os.getenv("JELLYFIN_API_KEY")
     if not jellyfin_url or not api_key:
         raise ValueError("JELLYFIN_URL and JELLYFIN_API_KEY must be set in environment variables.")
     session = JellySession(jellyfin_url, api_key)
-    logger.info("Triggering Jellyfin library refresh via POST /Library/Refresh")
+
+    item_id = _get_virtual_folder_item_id(session, library_name)
+    if item_id:
+        logger.info("Triggering targeted Jellyfin scan for library '%s' (ItemId=%s)", library_name, item_id)
+        response = session.post(
+            f"/Items/{item_id}/Refresh",
+            params={"Recursive": "true", "MetadataRefreshMode": "Default", "ImageRefreshMode": "Default"},
+        )
+        if response.status_code == 204:
+            logger.info("Jellyfin targeted scan accepted (204) for '%s'", library_name)
+            return True, f"Jellyfin '{library_name}' library scan triggered"
+        logger.warning("Jellyfin targeted scan returned status %d", response.status_code)
+        return False, f"Jellyfin scan returned unexpected status {response.status_code}"
+
+    logger.warning("Library '%s' not found — falling back to full /Library/Refresh", library_name)
     response = session.post("/Library/Refresh")
     if response.status_code == 204:
-        logger.info("Jellyfin library refresh accepted (204)")
-        return True
-    logger.warning("Jellyfin library refresh returned unexpected status %d", response.status_code)
-    return False
+        logger.info("Jellyfin full library refresh accepted (204) as fallback")
+        return True, f"Library '{library_name}' not found — full Jellyfin refresh triggered instead"
+    logger.warning("Jellyfin full refresh returned status %d", response.status_code)
+    return False, f"Jellyfin full refresh returned unexpected status {response.status_code}"
 
 
 def jelly_pull()->bool:
