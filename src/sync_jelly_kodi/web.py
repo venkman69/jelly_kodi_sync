@@ -41,6 +41,8 @@ from .movie_rename import get_transcoded_movies, rename_movie
 from .sqlite_util import get_last_pull_times
 from .sync_ops import (
     AUTO_STEPS,
+    jelly_library_refresh_step,
+    kodi_library_scan_step,
     pull_jelly_step,
     pull_kodi_step,
     push_jelly_to_kodi_step,
@@ -313,6 +315,23 @@ def sync_tab() -> Div:
                 hx_swap="innerHTML",
                 hx_indicator="#manual-spinner",
             ),
+            style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.5rem",
+        ),
+        Div(
+            Button(
+                "Refresh Kodi library",
+                hx_post="/sync/refresh-kodi-library",
+                hx_target="#manual-result",
+                hx_swap="innerHTML",
+                hx_indicator="#manual-spinner",
+            ),
+            Button(
+                "Refresh Jellyfin library",
+                hx_post="/sync/refresh-jelly-library",
+                hx_target="#manual-result",
+                hx_swap="innerHTML",
+                hx_indicator="#manual-spinner",
+            ),
             style="display:flex; flex-wrap:wrap; gap:0.5rem",
         ),
         Span(
@@ -361,6 +380,18 @@ def sync_pull_kodi():
 def sync_pull_jelly():
     ok, msg = pull_jelly_step()
     return _tick(ok, "Pull from Jellyfin", msg), staleness_panel(oob=True)
+
+
+@rt("/sync/refresh-kodi-library")
+def sync_refresh_kodi_library():
+    ok, msg = kodi_library_scan_step()
+    return _tick(ok, "Refresh Kodi library", msg)
+
+
+@rt("/sync/refresh-jelly-library")
+def sync_refresh_jelly_library():
+    ok, msg = jelly_library_refresh_step()
+    return _tick(ok, "Refresh Jellyfin library", msg)
 
 
 @rt("/sync/push-jelly")

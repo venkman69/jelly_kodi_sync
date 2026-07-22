@@ -13,8 +13,8 @@ import logging
 import os
 
 from . import jelly_util, kodi_util
-from .jelly_util import JellySession, jelly_pull
-from .kodi_util import getKodi, kodi_pull
+from .jelly_util import JellySession, jelly_pull, jelly_library_refresh
+from .kodi_util import getKodi, kodi_pull, kodi_library_scan
 from .sqlite_util import find_jelly_items_by_file, find_kodi_items_by_file
 
 logger = logging.getLogger(__name__)
@@ -87,6 +87,26 @@ def set_watch_from_kodi_to_jelly(kodi_watched_items: list[dict]) -> tuple[int, i
 
 
 # --- Step wrappers: each returns (ok, message) -----------------------------------
+
+
+def kodi_library_scan_step() -> tuple[bool, str]:
+    try:
+        kodi_library_scan()
+        return True, "Kodi library scan triggered"
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Kodi library scan failed")
+        return False, f"Kodi library scan failed: {e}"
+
+
+def jelly_library_refresh_step() -> tuple[bool, str]:
+    try:
+        ok = jelly_library_refresh()
+        if ok:
+            return True, "Jellyfin library refresh triggered"
+        return False, "Jellyfin library refresh returned unexpected response"
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Jellyfin library refresh failed")
+        return False, f"Jellyfin library refresh failed: {e}"
 
 
 def preflight_kodi_step() -> tuple[bool, str]:

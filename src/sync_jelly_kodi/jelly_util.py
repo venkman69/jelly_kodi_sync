@@ -140,6 +140,26 @@ def update_playback_position(
         return False
 
 
+def jelly_library_refresh() -> bool:
+    """Trigger a full Jellyfin library refresh (POST /Library/Refresh).
+
+    This is a fire-and-forget call — Jellyfin queues the scan asynchronously
+    and returns immediately. A 204 response means the request was accepted.
+    """
+    jellyfin_url = os.getenv("JELLYFIN_URL")
+    api_key = os.getenv("JELLYFIN_API_KEY")
+    if not jellyfin_url or not api_key:
+        raise ValueError("JELLYFIN_URL and JELLYFIN_API_KEY must be set in environment variables.")
+    session = JellySession(jellyfin_url, api_key)
+    logger.info("Triggering Jellyfin library refresh via POST /Library/Refresh")
+    response = session.post("/Library/Refresh")
+    if response.status_code == 204:
+        logger.info("Jellyfin library refresh accepted (204)")
+        return True
+    logger.warning("Jellyfin library refresh returned unexpected status %d", response.status_code)
+    return False
+
+
 def jelly_pull()->bool:
     """
     Fetch all watch status of all items from Jellyfin server and save into database

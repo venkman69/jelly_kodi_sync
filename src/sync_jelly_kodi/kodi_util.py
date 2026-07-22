@@ -31,6 +31,13 @@ def kodi_clean():
     mk = getKodi()
     mk.VideoLibrary.Clean()
 
+def kodi_library_scan():
+    """Trigger a full Kodi video library scan (VideoLibrary.Scan)."""
+    logger.info("Triggering Kodi library scan")
+    mk = getKodi()
+    mk.VideoLibrary.Scan()
+    logger.info("Kodi library scan triggered")
+
 def kodi_fetch_all_movies():
     mk = getKodi()
     movies = mk.VideoLibrary.GetMovies(properties=
