@@ -15,6 +15,7 @@ from fasthtml.common import (
     A,
     Button as HtmlButton,
     Div,
+    Script,
     Form,
     H2,
     Hidden,
