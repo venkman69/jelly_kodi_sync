@@ -259,6 +259,18 @@ def get_watched_kodi_items() -> List[Dict[str, Any]]:
     return results
 
 
+def delete_jelly_items_by_file(unified_file: str) -> int:
+    """Delete all jellyitems rows whose unified_file matches ``unified_file``.
+
+    Returns the number of rows deleted.
+    """
+    conn = get_sqlite_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM jellyitems WHERE unified_file = ?", (unified_file,))
+    conn.commit()
+    return cursor.rowcount
+
+
 def get_last_pull_times() -> Dict[str, Optional[str]]:
     """Return the most recent ``last_updated`` per source table.
 

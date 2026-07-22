@@ -37,7 +37,7 @@ from fasthtml.common import (
 )
 
 from . import jelly_util, utils
-from .movie_rename import get_transcoded_movies, rename_movie
+from .movie_rename import delete_movie, get_transcoded_movies, rename_movie
 from .sqlite_util import get_last_pull_times
 from .sync_ops import (
     AUTO_STEPS,
@@ -78,6 +78,15 @@ _spinner_css = Style(
         .tab-link        { color: #aaa; }
         .tab-link.active { color: #fff; }
     }
+    .btn-delete {
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-size: 1.1rem;
+        padding: 0 0.3rem;
+        opacity: 0.6;
+    }
+    .btn-delete:hover { opacity: 1; }
     .htmx-indicator {
         display: none;
         margin-left: 0.5rem;
@@ -135,8 +144,22 @@ def movie_row(m: dict, status: str = "", ok: bool | None = None) -> Tr:
             style="width:22rem",
             placeholder="Title_(YEAR).ext",
         ),
-        Button("Rename", type="submit"),
+        Button("🏷️", type="submit", title="Rename"),
         hx_post="/rename",
+        hx_target=f"#{rid}",
+        hx_swap="outerHTML",
+    )
+
+    delete_btn = Form(
+        Hidden(name="current_file", value=m["current_file"]),
+        Button(
+            "🗑️",
+            type="submit",
+            title="Delete file and sidecars",
+            cls="btn-delete",
+            onclick="return confirm('Delete " + m["current_file"].replace("'", "\\'") + " and all its sidecars?')",
+        ),
+        hx_post="/movie-delete",
         hx_target=f"#{rid}",
         hx_swap="outerHTML",
     )
@@ -146,6 +169,7 @@ def movie_row(m: dict, status: str = "", ok: bool | None = None) -> Tr:
         Td(m["title"] or "—"),
         Td(str(m["year"]) if m["year"] else "—"),
         Td(form, *flags),
+        Td(delete_btn),
         Td(status_cell),
         id=rid,
     )
@@ -178,6 +202,7 @@ def movies_table() -> Div:
                 Th("Jellyfin title"),
                 Th("Year"),
                 Th("Proposed name"),
+                Th(""),
                 Th("Status"),
             )
         ),
@@ -438,6 +463,24 @@ def rename(current_file: str, proposed: str):
             },
         )
     return movie_row(m, status=message, ok=ok)
+
+
+@rt("/movie-delete")
+def movie_delete(current_file: str):
+    logger.debug("/movie-delete: request received current_file='%s'", current_file)
+    ok, message = delete_movie(current_file)
+    logger.debug("/movie-delete: result ok=%s message='%s'", ok, message)
+    if ok:
+        # Row is gone — replace it with an empty, invisible row so HTMX has a target.
+        rid = _row_id(current_file)
+        return Tr(id=rid, style="display:none")
+    # On failure keep the row visible with an error status.
+    m = next(
+        (x for x in get_transcoded_movies() if x["current_file"] == current_file),
+        {"current_file": current_file, "title": "", "year": None, "ext": "",
+         "proposed": "", "has_metadata": False, "exists_on_disk": True, "collision": False},
+    )
+    return movie_row(m, status=message, ok=False)
 
 
 @rt("/refresh")

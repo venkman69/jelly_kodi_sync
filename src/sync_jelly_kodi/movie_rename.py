@@ -16,7 +16,7 @@ import re
 from collections import Counter
 
 from .naming import is_kodi_named, proposed_filename
-from .sqlite_util import get_transcoded_movie_items
+from .sqlite_util import get_transcoded_movie_items, delete_jelly_items_by_file
 
 logger = logging.getLogger(__name__)
 
@@ -285,4 +285,67 @@ def rename_movie(current_file: str, proposed: str) -> tuple[bool, str]:
     if failed:
         msg += f"; {len(failed)} sidecar(s) failed"
     logger.debug("rename_movie: complete - ok=True, msg='%s'", msg)
+    return True, msg
+
+
+def delete_movie(current_file: str) -> tuple[bool, str]:
+    """Delete a TRANSCODED movie file and all its sidecars.
+
+    Also removes the matching rows from the local jellyitems DB cache so the
+    file no longer appears in the renamer table without needing a full refresh.
+
+    Returns (ok, message).
+    """
+    logger.debug("delete_movie: called with current_file='%s'", current_file)
+
+    directory = _transcoded_dir()
+    if not directory:
+        logger.debug("delete_movie: aborting - TRANSCODED directory not configured")
+        return False, "TRANSCODED_LOCAL_PATH is not configured."
+
+    current_file = os.path.basename(current_file or "")
+    if not current_file:
+        logger.debug("delete_movie: aborting - empty filename after sanitization")
+        return False, "Filename is required."
+
+    real_source = _resolve_source(directory, current_file)
+    if real_source is None:
+        logger.debug("delete_movie: aborting - file not found on disk: '%s'", current_file)
+        return False, f"File not found on disk: {current_file}"
+    logger.debug("delete_movie: resolved source on disk -> '%s'", real_source)
+
+    sidecars = _find_sidecars(directory, real_source)
+
+    # Delete video file first.
+    video_path = os.path.join(directory, real_source)
+    try:
+        os.remove(video_path)
+        logger.info("Deleted '%s'", video_path)
+    except OSError as e:
+        logger.error("delete_movie: failed to delete '%s': %s", video_path, e)
+        return False, f"Could not delete file: {e}"
+
+    # Delete sidecars best-effort; a sidecar failure doesn't un-delete the video.
+    deleted_sides, failed_sides = 0, []
+    for side in sidecars:
+        side_path = os.path.join(directory, side)
+        try:
+            os.remove(side_path)
+            deleted_sides += 1
+            logger.info("Deleted sidecar '%s'", side_path)
+        except OSError as e:
+            failed_sides.append(side)
+            logger.warning("delete_movie: failed to delete sidecar '%s': %s", side, e)
+
+    # Remove from local DB cache (best-effort; stale rows are harmless).
+    unified_file = f"/{real_source}"
+    removed = delete_jelly_items_by_file(unified_file)
+    logger.debug("delete_movie: removed %d jellyitems DB row(s) for '%s'", removed, unified_file)
+
+    msg = f"Deleted {real_source}"
+    if deleted_sides:
+        msg += f" (+{deleted_sides} sidecar{'s' if deleted_sides != 1 else ''})"
+    if failed_sides:
+        msg += f"; {len(failed_sides)} sidecar(s) could not be deleted"
+    logger.debug("delete_movie: complete - ok=True, msg='%s'", msg)
     return True, msg
