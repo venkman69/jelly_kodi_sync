@@ -5,7 +5,6 @@ After=network-online.target
 
 [Service]
 Type=exec
-Environment=PATH=%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
 ExecStart=%h/git/jelly_kodi_sync/bin/sync_jelly_kodi_web
 
 [Install]

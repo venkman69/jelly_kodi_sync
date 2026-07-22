@@ -11,4 +11,4 @@ set -a
 . "$PROJ_DIR/.credentials"
 set +a
 
-exec uv run sync-jelly-kodi web "$@"
+exec uv run sync-jelly-kodi web --port "${WEB_PORT:-5001}" --host "${WEB_HOST:-127.0.0.1}" "$@"
