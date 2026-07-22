@@ -16,6 +16,7 @@ dependencies = [
     "pure-python-adb",
     "typer>=0.20.1",
     "python-fasthtml>=0.14.9",
+    "monsterui>=1.0.46",
 ]
 
 [project.scripts]
