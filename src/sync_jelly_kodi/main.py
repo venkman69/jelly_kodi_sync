@@ -172,5 +172,12 @@ def sync():
     logger.info("Done")
 
 
+@app.command()
+def web(host: str = "127.0.0.1", port: int = 5001):
+    """Launch the FastHTML UI to rename misnamed TRANSCODED movies (auto-reloads on change)."""
+    from .web import serve
+    serve(host, port)
+
+
 if __name__ == "__main__":
     app()

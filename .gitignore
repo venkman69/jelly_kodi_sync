@@ -6,5 +6,9 @@ venv
 __pycache__
 *.egg-info
 *.pyc
+# FastHTML session-signing key (secret, generated at runtime)
+.sesskey
+# Playwright MCP test artifacts
+.playwright-mcp
 # Added by ggshield
 .cache_ggshield

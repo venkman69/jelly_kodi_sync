@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "sync_jelly_kodi"
 version = "0.2.0"
 description = "A tool to synchronize watch status between Jellyfin and Kodi."
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dependencies = [
     "requests",
     "python-dotenv",
@@ -15,6 +15,7 @@ dependencies = [
     "wakeonlan",
     "pure-python-adb",
     "typer>=0.20.1",
+    "python-fasthtml>=0.14.9",
 ]
 
 [project.scripts]

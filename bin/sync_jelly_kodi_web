@@ -1,0 +1,14 @@
+#!/bin/bash
+# Launch the FastHTML movie-renamer web UI in the foreground.
+# Sources .env / .credentials, then runs `sync-jelly-kodi web`.
+# Extra args are passed through, e.g:  ./bin/sync_jelly_kodi_web --port 8080
+SCRIPT_DIR=$(dirname "$0")
+PROJ_DIR=$(dirname "$SCRIPT_DIR")
+cd "$PROJ_DIR" || exit 1
+
+set -a
+. "$PROJ_DIR/.env"
+. "$PROJ_DIR/.credentials"
+set +a
+
+exec uv run sync-jelly-kodi web "$@"

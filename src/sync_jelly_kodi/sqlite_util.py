@@ -289,6 +289,23 @@ def find_jelly_items_by_file(file_path: str) -> List[Dict[str, Any]]:
     return [json.loads(row[0]) for row in cursor.fetchall()]
 
 
+def get_transcoded_movie_items() -> List[Dict[str, Any]]:
+    """
+    Get Jellyfin items that are Movies living under the TRANSCODED root.
+    Used by the movie-rename UI to find files that may need renaming.
+    """
+    conn = get_sqlite_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT item_json FROM jellyitems
+        WHERE unified_root = 'TRANSCODED'
+          AND json_extract(item_json, '$.Type') = 'Movie'
+    """)
+
+    return [json.loads(row[0]) for row in cursor.fetchall()]
+
+
 def get_all_jelly_item_ids() -> List[Tuple[str, str]]:
     """
     Get all Jellyfin item (id, user_id) pairs for stale item detection
