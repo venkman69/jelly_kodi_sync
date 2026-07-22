@@ -63,3 +63,8 @@ users)`, consistent with how sidecar rename results are reported today.
   data isn't silently lost).
 * **`DRY_RUN`** should be respected, as `sync_watch_status_from_kodi_to_jelly` already
   does.
+
+**Status:** Observed in testing (2026-07-22) that Jellyfin is smart enough to recognise
+the renamed file as the same movie (likely via embedded TMDB/IMDB ID in its library
+database) and automatically carries over watch progress without any intervention from
+this tool. No implementation needed unless this behaviour is found to be unreliable.
