@@ -49,6 +49,7 @@ from .sync_ops import (
     jelly_transcoded_refresh_step,
     jelly_archive_refresh_step,
     mark_archive_watched_step,
+    kodi_library_clean_step,
     kodi_library_scan_step,
     pull_jelly_step,
     pull_kodi_step,
@@ -402,11 +403,11 @@ def _pull_btn(label: str, route: str, color: str = "") -> HtmlButton:
     )
 
 
-def _scan_btn(label: str, route: str, color: str = "") -> HtmlButton:
-    """Tiny labeled library-scan button for the staleness bar."""
+def _scan_btn(label: str, route: str, color: str = "", icon: str = "refresh-cw") -> HtmlButton:
+    """Tiny labeled button for the staleness bar (scan, clean, etc.)."""
     color_style = f"color:{color};" if color else ""
     return HtmlButton(
-        UkIcon("refresh-cw", cls="h-3 w-3"),
+        UkIcon(icon, cls="h-3 w-3"),
         Span(label, cls="ml-0.5 font-bold"),
         hx_post=route,
         hx_target="#header-scan-result",
@@ -438,6 +439,7 @@ def staleness_panel(oob: bool = False, failure_msg: str = "") -> Div:
         *error,
         Span("|", cls="text-muted-foreground mx-1 select-none opacity-30"),
         _scan_btn("Kodi", "/sync/refresh-kodi-library", color="#1BBBE9"),
+        _scan_btn("Clean", "/sync/clean-kodi-library", color="#1BBBE9", icon="eraser"),
         _scan_btn("Trans", "/sync/refresh-jelly-transcoded", color="#AA5CC3"),
         _scan_btn("Arch", "/sync/refresh-jelly-archive", color="#AA5CC3"),
         Span(id="header-scan-result"),
@@ -607,6 +609,13 @@ def sync_pull_jelly():
 @rt("/sync/refresh-kodi-library")
 def sync_refresh_kodi_library():
     ok, msg = kodi_library_scan_step()
+    cls = "text-success ml-1" if ok else "text-destructive ml-1"
+    return Span(("✓" if ok else "✗") + f" Kodi: {msg}", cls=cls)
+
+
+@rt("/sync/clean-kodi-library")
+def sync_clean_kodi_library():
+    ok, msg = kodi_library_clean_step()
     cls = "text-success ml-1" if ok else "text-destructive ml-1"
     return Span(("✓" if ok else "✗") + f" Kodi: {msg}", cls=cls)
 

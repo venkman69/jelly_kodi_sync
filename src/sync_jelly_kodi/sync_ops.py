@@ -16,7 +16,7 @@ from . import jelly_util, kodi_util
 from .jelly_util import (
     JellySession, jelly_pull, jelly_library_refresh, mark_library_played,
 )
-from .kodi_util import getKodi, kodi_pull, kodi_library_scan
+from .kodi_util import getKodi, kodi_clean, kodi_pull, kodi_library_scan
 from .sqlite_util import find_jelly_items_by_file, find_kodi_items_by_file
 
 logger = logging.getLogger(__name__)
@@ -98,6 +98,15 @@ def kodi_library_scan_step() -> tuple[bool, str]:
     except Exception as e:  # noqa: BLE001
         logger.exception("Kodi library scan failed")
         return False, f"Kodi library scan failed: {e}"
+
+
+def kodi_library_clean_step() -> tuple[bool, str]:
+    try:
+        kodi_clean()
+        return True, "Kodi library clean triggered"
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Kodi library clean failed")
+        return False, f"Kodi library clean failed: {e}"
 
 
 def jelly_transcoded_refresh_step() -> tuple[bool, str]:
