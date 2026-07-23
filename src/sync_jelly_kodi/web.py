@@ -401,12 +401,13 @@ def _pull_btn(label: str, route: str) -> HtmlButton:
     )
 
 
-def staleness_panel(oob: bool = False) -> Div:
+def staleness_panel(oob: bool = False, failure_msg: str = "") -> Div:
     """Pull-freshness bar shown on every tab; updated out-of-band after syncs."""
     times = get_last_pull_times()
     kodi_age, kodi_cls = _fmt_age(times["kodi"])
     jelly_age, jelly_cls = _fmt_age(times["jelly"])
     extra = {"hx_swap_oob": "true"} if oob else {}
+    error = [Span(f"✗ {failure_msg}", cls="text-destructive ml-2")] if failure_msg else []
     return Div(
         Span("Kodi: ", cls="text-muted-foreground"),
         Span(kodi_age, cls=kodi_cls),
@@ -414,6 +415,7 @@ def staleness_panel(oob: bool = False) -> Div:
         Span("Jellyfin: ", cls="text-muted-foreground ml-3"),
         Span(jelly_age, cls=jelly_cls),
         _pull_btn("Jellyfin", "/pull-jelly"),
+        *error,
         A(
             Span(UkIcon("sun", cls="h-4 w-4"), cls="theme-sun"),
             Span(UkIcon("moon", cls="h-4 w-4"), cls="theme-moon"),
@@ -594,13 +596,13 @@ def sync_auto(idx: int, op_id: str = ""):
 @rt("/sync/pull-kodi")
 def sync_pull_kodi():
     ok, msg = pull_kodi_step()
-    return _tick(ok, "from Kodi", msg), staleness_panel(oob=True)
+    return _tick(ok, "from Kodi", msg), staleness_panel(oob=True, failure_msg="" if ok else msg)
 
 
 @rt("/sync/pull-jelly")
 def sync_pull_jelly():
     ok, msg = pull_jelly_step()
-    return _tick(ok, "from Jellyfin", msg), staleness_panel(oob=True)
+    return _tick(ok, "from Jellyfin", msg), staleness_panel(oob=True, failure_msg="" if ok else msg)
 
 
 @rt("/sync/refresh-kodi-library")
@@ -641,16 +643,16 @@ def sync_push_kodi():
 
 @rt("/pull-kodi")
 def pull_kodi_header():
-    pull_kodi_step()
-    return staleness_panel()
+    ok, msg = pull_kodi_step()
+    return staleness_panel(failure_msg="" if ok else msg)
 
 
 @rt("/pull-jelly")
 def pull_jelly_header():
-    pull_jelly_step()
+    ok, msg = pull_jelly_step()
     # Also refresh the renamer table (Jellyfin data drives it) via OOB swap; the
     # swap is dropped harmlessly on tabs where #movies isn't in the DOM.
-    return staleness_panel(), movies_list(oob=True)
+    return staleness_panel(failure_msg="" if ok else msg), movies_list(oob=True)
 
 
 @rt("/rename")
