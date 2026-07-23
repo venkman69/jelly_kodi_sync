@@ -17,6 +17,7 @@ from fasthtml.common import (
     A,
     Button as HtmlButton,
     Div,
+    Link,
     Script,
     Form,
     H2,
@@ -65,6 +66,21 @@ utils.config_logger(
 logger = logging.getLogger(__name__)
 
 URL_PREFIX = os.getenv("URL_PREFIX", "").rstrip("/")
+
+# Diagonal-split circle: top-left = Kodi blue, bottom-right = Jellyfin purple.
+# Served as a data URI so it works regardless of URL_PREFIX.
+import base64 as _b64
+_FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+    '<defs>'
+    '<clipPath id="kh"><polygon points="0,0 32,0 0,32"/></clipPath>'
+    '<clipPath id="jh"><polygon points="32,0 32,32 0,32"/></clipPath>'
+    '</defs>'
+    '<circle cx="16" cy="16" r="16" fill="#1BBBE9" clip-path="url(#kh)"/>'
+    '<circle cx="16" cy="16" r="16" fill="#AA5CC3" clip-path="url(#jh)"/>'
+    '</svg>'
+)
+_favicon_href = "data:image/svg+xml;base64," + _b64.b64encode(_FAVICON_SVG.encode()).decode()
 
 # Only what FrankenUI/Tailwind can't handle: HTMX indicator + spinner.
 _htmx_css = Style(
@@ -137,6 +153,7 @@ document.addEventListener('htmx:afterSettle', _syncTheme);
 app, rt = fast_app(
     hdrs=(
         Meta(name="viewport", content="width=device-width, initial-scale=1"),
+        Link(rel="icon", type="image/svg+xml", href=_favicon_href),
         *Theme.slate.headers(),
         _htmx_css,
         _theme_toggle_script,
