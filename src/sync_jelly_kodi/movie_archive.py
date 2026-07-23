@@ -160,7 +160,8 @@ def archive_movie(current_file: str) -> list[dict]:
     dir_name = _normalize_illegal(stem)   # safe for CIFS archive mount
     target_dir = os.path.join(archive_root, dir_name)
     target_file = os.path.join(target_dir, real_source)
-    record("Compute target path", True, f"→ {target_file}")
+    record("Compute target path", True,
+           f"archive folder '{dir_name}/', file '{real_source}'  →  {target_file}")
 
     # 3. Check the target file doesn't already exist
     if os.path.isfile(target_file):
@@ -168,7 +169,7 @@ def archive_movie(current_file: str) -> list[dict]:
                f"Target already exists: {target_file}",
                f"existing: {target_file}")
         return steps
-    record("Check target is clear", True, "Target path is available.")
+    record("Check target is clear", True, "Target file does not exist yet.")
 
     # 4. Verify ARCHIVE root is mounted / accessible
     if not os.path.isdir(archive_root):
@@ -178,43 +179,48 @@ def archive_movie(current_file: str) -> list[dict]:
         return steps
     record("Verify ARCHIVE root", True, f"Accessible: {archive_root}")
 
-    # Collect sidecars before touching the filesystem.
+    # 5. Discover sidecars up front (named, so the audit trail shows what will move)
     sidecars = _find_sidecars(transcoded_dir, real_source)
+    if sidecars:
+        record("Discover sidecars", True, f"{len(sidecars)} found: {', '.join(sidecars)}")
+    else:
+        record("Discover sidecars", True, "No sidecar files found.")
 
-    # 5. Create target directory (plain mkdir catches pre-existing collisions)
+    # 6. Create target directory (plain mkdir catches pre-existing collisions)
     try:
         os.mkdir(target_dir)
-        record("Create target directory", True, f"Created '{target_dir}'")
+        record("Create archive directory", True, f"Created '{dir_name}/' at {target_dir}")
     except FileExistsError:
         # Directory exists but the target file doesn't — safe to reuse (prior failed attempt).
-        record("Create target directory", True, f"Directory already exists (reusing): '{target_dir}'")
+        record("Create archive directory", True,
+               f"Directory '{dir_name}/' already existed — reusing {target_dir}")
     except OSError as e:
-        record("Create target directory", False, f"mkdir failed: {e}",
-               f"target: {target_dir}")
+        record("Create archive directory", False, f"mkdir failed: {e}",
+               f"target dir not created: {target_dir}")
         return steps
 
-    # 6. Move video file
+    # 7. Move video file into the archive directory
     source_path = os.path.join(transcoded_dir, real_source)
     try:
         shutil.move(source_path, target_file)
-        record("Move video", True, f"'{real_source}' → archive")
+        record("Move video", True, f"'{real_source}'  →  {target_file}")
     except OSError as e:
         record("Move video", False, f"shutil.move failed: {e}",
-               f"source: {source_path}; target dir created at: {target_dir}")
+               f"NEEDS MANUAL FIX: video still at '{source_path}'; empty dir created at '{target_dir}'")
         return steps
 
-    # 7. Move sidecars (non-fatal per file; all are attempted regardless)
+    # 8. Move each sidecar into the same directory (non-fatal per file; all attempted)
     for sidecar in sidecars:
         sidecar_src = os.path.join(transcoded_dir, sidecar)
         sidecar_dst = os.path.join(target_dir, sidecar)
         try:
             shutil.move(sidecar_src, sidecar_dst)
-            record(f"Move sidecar '{sidecar}'", True, "Moved to archive directory.")
+            record(f"Move sidecar '{sidecar}'", True, f"→ {sidecar_dst}")
         except OSError as e:
             record(f"Move sidecar '{sidecar}'", False, f"Move failed: {e}",
-                   f"sidecar still at: {sidecar_src}; video is at: {target_file}")
+                   f"NEEDS MANUAL FIX: sidecar still at '{sidecar_src}'; video already at '{target_file}'")
 
-    # 8. Remove from jellyitems DB cache so the file doesn't reappear on next load
+    # 9. Remove from jellyitems DB cache so the file doesn't reappear on next load
     unified_file = f"/{real_source}"
     removed = delete_jelly_items_by_file(unified_file)
     record("Remove from Jellyfin cache", True, f"Removed {removed} cached row(s) for '{unified_file}'.")

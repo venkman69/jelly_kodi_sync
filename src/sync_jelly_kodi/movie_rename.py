@@ -214,78 +214,139 @@ def case_safe_rename(directory: str, src: str, dst: str) -> None:
         logger.debug("case_safe_rename: direct rename done: '%s' -> '%s'", src_path, dst_path)
 
 
-def rename_movie(current_file: str, proposed: str) -> tuple[bool, str]:
-    """Rename a TRANSCODED movie (and its sidecars) to ``proposed``.
+def rename_movie_steps(current_file: str, proposed: str) -> list[dict]:
+    """Rename a TRANSCODED movie (and sidecars), returning a step-by-step audit trail.
 
-    Returns (ok, message).
+    Each step is ``{label, ok, detail, current_state}``. Processing halts on any
+    video-critical failure; ``current_state`` then spells out exactly where the file
+    was left so it can be fixed by hand. Sidecar failures are recorded per file but
+    don't halt the remaining sidecars.
+
+    The rename strategy is made explicit: a case-only change on a case-insensitive
+    (CIFS) share is done in two moves via a temporary filename, and each move is its
+    own confirmed step; otherwise a single direct move is used.
     """
-    logger.debug("rename_movie: called with current_file='%s' proposed='%s'", current_file, proposed)
+    steps: list[dict] = []
+
+    def rec(label: str, ok: bool, detail: str = "", current_state: str = "") -> bool:
+        steps.append({"label": label, "ok": ok, "detail": detail, "current_state": current_state})
+        logger.log(logging.INFO if ok else logging.WARNING,
+                   "rename step '%s': ok=%s — %s", label, ok, detail)
+        return ok
 
     directory = _transcoded_dir()
-    if not directory:
-        logger.debug("rename_movie: aborting - TRANSCODED directory not configured")
-        return False, "TRANSCODED_LOCAL_PATH is not configured."
-
-    # Guard against path traversal; operate on bare filenames only.
-    raw_current, raw_proposed = current_file, proposed
     current_file = os.path.basename(current_file or "")
     proposed = os.path.basename(proposed or "")
-    if raw_current != current_file:
-        logger.debug("rename_movie: path traversal guard stripped current_file: '%s' -> '%s'", raw_current, current_file)
-    if raw_proposed != proposed:
-        logger.debug("rename_movie: path traversal guard stripped proposed: '%s' -> '%s'", raw_proposed, proposed)
-    if not current_file or not proposed:
-        logger.debug("rename_movie: aborting - empty filename after sanitization (current='%s', proposed='%s')", current_file, proposed)
-        return False, "Both current and proposed filenames are required."
 
-    # Locate the real on-disk file (may differ from Jellyfin's name via CIFS mapping).
-    logger.debug("rename_movie: resolving source file '%s' in '%s'", current_file, directory)
+    # 1. Validate inputs / configuration
+    if not directory:
+        rec("Validate configuration", False, "TRANSCODED directory is not configured.")
+        return steps
+    if not current_file or not proposed:
+        rec("Validate inputs", False, "Both current and proposed filenames are required.")
+        return steps
+    rec("Validate inputs", True, f"'{current_file}' → '{proposed}' in {directory}")
+
+    # 2. Locate the real on-disk source (may differ from Jellyfin's name via CIFS mapping)
     real_source = _resolve_source(directory, current_file)
     if real_source is None:
-        logger.debug("rename_movie: aborting - source file not found on disk")
-        return False, f"Source file not found on disk: {current_file}"
-    logger.debug("rename_movie: resolved source on disk -> '%s'", real_source)
+        rec("Locate source file", False, f"'{current_file}' not found on disk.",
+            f"expected at: {os.path.join(directory, current_file)}")
+        return steps
+    if real_source != current_file:
+        rec("Locate source file", True,
+            f"Matched via CIFS-normalized name: on disk it is '{real_source}' "
+            f"(Jellyfin reported '{current_file}').")
+    else:
+        rec("Locate source file", True, f"Found '{real_source}'.")
 
-    old_stem = os.path.splitext(real_source)[0]
-    new_stem = os.path.splitext(proposed)[0]
-    logger.debug("rename_movie: old_stem='%s' new_stem='%s'", old_stem, new_stem)
+    # 3. Determine strategy and confirm the destination is clear
+    dst = proposed
+    dst_path = os.path.join(directory, dst)
+    case_only = real_source != dst and real_source.lower() == dst.lower()
+    if os.path.exists(dst_path) and not case_only:
+        rec("Check destination is clear", False,
+            f"A different file already exists at the target name '{dst}'.",
+            f"existing file: {dst_path}")
+        return steps
+    if case_only:
+        rec("Choose rename strategy", True,
+            f"Case-only change on a case-insensitive share → two-step rename via a "
+            f"temporary filename ('{real_source}' vs '{dst}').")
+    else:
+        rec("Choose rename strategy", True, f"Direct single-move rename → '{dst}'.")
 
+    # 4. Discover sidecars up front (named, for transparency)
     sidecars = _find_sidecars(directory, real_source)
+    if sidecars:
+        rec("Discover sidecars", True, f"{len(sidecars)} found: {', '.join(sidecars)}")
+    else:
+        rec("Discover sidecars", True, "No sidecar files found.")
 
-    # Rename the video first; abort on failure before touching sidecars.
-    logger.debug("rename_movie: renaming video file '%s' -> '%s'", real_source, proposed)
-    try:
-        case_safe_rename(directory, real_source, proposed)
-    except (FileNotFoundError, FileExistsError) as e:
-        logger.warning("Rename failed: %s", e)
-        return False, str(e)
-    except OSError as e:
-        logger.error("Rename failed: %s", e)
-        return False, f"OS error: {e}"
+    # 5. Move the video (temp path = two confirmed steps; direct = one)
+    src_path = os.path.join(directory, real_source)
+    if case_only:
+        tmp = f"{dst}.tmp.{os.getpid()}"
+        tmp_path = os.path.join(directory, tmp)
+        try:
+            os.rename(src_path, tmp_path)
+            rec("Move video (step 1/2 → temp)", True, f"'{real_source}' → '{tmp}'")
+        except OSError as e:
+            rec("Move video (step 1/2 → temp)", False, f"Rename failed: {e}",
+                f"unchanged; source still at: {src_path}")
+            return steps
+        try:
+            os.rename(tmp_path, dst_path)
+            rec("Move video (step 2/2 → final)", True, f"'{tmp}' → '{dst}'")
+        except OSError as e:
+            rec("Move video (step 2/2 → final)", False, f"Rename failed: {e}",
+                f"NEEDS MANUAL FIX: file is stranded at temporary name '{tmp_path}' — "
+                f"rename it to '{dst}'")
+            return steps
+    else:
+        try:
+            os.rename(src_path, dst_path)
+            rec("Move video", True, f"'{real_source}' → '{dst}'")
+        except OSError as e:
+            rec("Move video", False, f"Rename failed: {e}",
+                f"unchanged; source still at: {src_path}")
+            return steps
 
-    logger.info("Renamed '%s' -> '%s' in %s", real_source, proposed, directory)
+    logger.info("Renamed '%s' -> '%s' in %s", real_source, dst, directory)
 
-    # Carry along sidecars (best-effort; a sidecar failure doesn't undo the video).
-    moved, failed = 0, []
+    # 6. Move sidecars alongside the video (each named; failures flagged, non-fatal)
+    old_stem = os.path.splitext(real_source)[0]
+    new_stem = os.path.splitext(dst)[0]
     for side in sidecars:
         suffix = side[len(old_stem):]
         new_side = new_stem + suffix
-        logger.debug("rename_movie: renaming sidecar '%s' -> '%s' (suffix='%s')", side, new_side, suffix)
         try:
             case_safe_rename(directory, side, new_side)
-            moved += 1
-            logger.info("Renamed sidecar '%s' -> '%s'", side, new_side)
+            rec(f"Move sidecar '{side}'", True, f"→ '{new_side}'")
         except OSError as e:
-            failed.append(side)
-            logger.warning("Sidecar rename failed for '%s': %s", side, e)
+            rec(f"Move sidecar '{side}'", False, f"Move failed: {e}",
+                f"NEEDS MANUAL FIX: sidecar still at '{os.path.join(directory, side)}'; "
+                f"video already renamed to '{dst}'")
 
-    msg = f"Renamed to {proposed}"
-    if moved:
-        msg += f" (+{moved} sidecar{'s' if moved != 1 else ''})"
-    if failed:
-        msg += f"; {len(failed)} sidecar(s) failed"
-    logger.debug("rename_movie: complete - ok=True, msg='%s'", msg)
-    return True, msg
+    return steps
+
+
+def rename_movie(current_file: str, proposed: str) -> tuple[bool, str]:
+    """Backward-compatible wrapper over :func:`rename_movie_steps`.
+
+    Returns (ok, message) summarising the step run.
+    """
+    steps = rename_movie_steps(current_file, proposed)
+    ok = all(s["ok"] for s in steps)
+    if ok:
+        moved = sum(1 for s in steps if s["label"].startswith("Move sidecar") and s["ok"])
+        msg = f"Renamed to {proposed}"
+        if moved:
+            msg += f" (+{moved} sidecar{'s' if moved != 1 else ''})"
+        return True, msg
+    # First failing step drives the message.
+    bad = next((s for s in steps if not s["ok"]), None)
+    return False, (bad["detail"] if bad else "Rename failed")
 
 
 def delete_movie(current_file: str) -> tuple[bool, str]:

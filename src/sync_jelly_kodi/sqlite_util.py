@@ -94,6 +94,24 @@ def initialize_schema(conn: sqlite3.Connection):
         )
     """)
 
+    # Audit log: one row per step of a rename/archive/sync operation. Steps sharing
+    # an op_id belong to one operation; step_index orders them. This is the durable
+    # record behind the Audit Log tab and post-hoc troubleshooting.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            op_id TEXT NOT NULL,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            action TEXT NOT NULL,
+            target TEXT,
+            step_index INTEGER NOT NULL,
+            step_label TEXT NOT NULL,
+            ok INTEGER NOT NULL,
+            detail TEXT,
+            current_state TEXT
+        )
+    """)
+
     # Create indexes if not exist
     indexes = [
         ("idx_jelly_unified_file", "CREATE INDEX IF NOT EXISTS idx_jelly_unified_file ON jellyitems(unified_file)"),
@@ -101,6 +119,8 @@ def initialize_schema(conn: sqlite3.Connection):
         ("idx_kodi_unified_file", "CREATE INDEX IF NOT EXISTS idx_kodi_unified_file ON kodiitems(unified_file)"),
         ("idx_kodi_playcount", "CREATE INDEX IF NOT EXISTS idx_kodi_playcount ON kodiitems(playcount)"),
         ("idx_kodi_resume_position", "CREATE INDEX IF NOT EXISTS idx_kodi_resume_position ON kodiitems(resume_position)"),
+        ("idx_audit_op_id", "CREATE INDEX IF NOT EXISTS idx_audit_op_id ON audit_log(op_id)"),
+        ("idx_audit_timestamp", "CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp)"),
     ]
 
     for index_name, sql in indexes:
@@ -269,6 +289,97 @@ def delete_jelly_items_by_file(unified_file: str) -> int:
     cursor.execute("DELETE FROM jellyitems WHERE unified_file = ?", (unified_file,))
     conn.commit()
     return cursor.rowcount
+
+
+def log_audit_step(
+    op_id: str,
+    action: str,
+    target: Optional[str],
+    step_index: int,
+    step_label: str,
+    ok: bool,
+    detail: str = "",
+    current_state: str = "",
+) -> None:
+    """Append a single operation-step to the audit log."""
+    conn = get_sqlite_connection()
+    conn.execute(
+        """INSERT INTO audit_log
+           (op_id, action, target, step_index, step_label, ok, detail, current_state)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (op_id, action, target, step_index, step_label, 1 if ok else 0, detail, current_state),
+    )
+    conn.commit()
+
+
+def log_audit_steps(op_id: str, action: str, target: Optional[str], steps: List[Dict[str, Any]]) -> None:
+    """Append a whole list of step dicts (``{label, ok, detail, current_state}``) at once."""
+    conn = get_sqlite_connection()
+    for i, s in enumerate(steps):
+        conn.execute(
+            """INSERT INTO audit_log
+               (op_id, action, target, step_index, step_label, ok, detail, current_state)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                op_id, action, target, i,
+                s.get("label", ""),
+                1 if s.get("ok") else 0,
+                s.get("detail", ""),
+                s.get("current_state", ""),
+            ),
+        )
+    conn.commit()
+
+
+def get_audit_operations(limit: int = 50) -> List[Dict[str, Any]]:
+    """Return the most recent operations, each with its ordered steps.
+
+    Groups audit_log rows by op_id, newest first. Each returned dict has:
+    ``op_id, timestamp, action, target, ok`` (True only if every step ok) and
+    ``steps`` (list of ``{step_label, ok, detail, current_state}`` in order).
+    """
+    conn = get_sqlite_connection()
+    cursor = conn.cursor()
+    # Newest operations by their max timestamp/id.
+    cursor.execute(
+        """SELECT op_id FROM audit_log
+           GROUP BY op_id
+           ORDER BY MAX(id) DESC
+           LIMIT ?""",
+        (limit,),
+    )
+    op_ids = [row[0] for row in cursor.fetchall()]
+    if not op_ids:
+        return []
+
+    ops: List[Dict[str, Any]] = []
+    for op_id in op_ids:
+        cursor.execute(
+            """SELECT timestamp, action, target, step_index, step_label, ok, detail, current_state
+               FROM audit_log WHERE op_id = ? ORDER BY step_index ASC""",
+            (op_id,),
+        )
+        rows = cursor.fetchall()
+        steps = [
+            {
+                "step_label": r[4],
+                "ok": bool(r[5]),
+                "detail": r[6] or "",
+                "current_state": r[7] or "",
+            }
+            for r in rows
+        ]
+        ops.append(
+            {
+                "op_id": op_id,
+                "timestamp": rows[0][0] if rows else None,
+                "action": rows[0][1] if rows else "",
+                "target": rows[0][2] if rows else "",
+                "ok": all(s["ok"] for s in steps),
+                "steps": steps,
+            }
+        )
+    return ops
 
 
 def get_last_pull_times() -> Dict[str, Optional[str]]:

@@ -9,6 +9,7 @@ Run via the CLI: ``uv run sync-jelly-kodi web``.
 import hashlib
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -42,8 +43,13 @@ from monsterui.all import Button, ButtonT, Container, Theme, UkIcon
 
 from . import utils
 from .movie_archive import archive_movie, get_watched_transcoded_movies
-from .movie_rename import delete_movie, get_transcoded_movies, rename_movie
-from .sqlite_util import get_last_pull_times
+from .movie_rename import delete_movie, get_transcoded_movies, rename_movie_steps
+from .sqlite_util import (
+    get_audit_operations,
+    get_last_pull_times,
+    log_audit_step,
+    log_audit_steps,
+)
 from .sync_ops import (
     AUTO_STEPS,
     jelly_library_refresh_step,
@@ -285,6 +291,7 @@ def tab_nav(active: str) -> Div:
         tab("Movie Renamer", f"{URL_PREFIX}/", "renamer"),
         tab("Jelly-Kodi Sync", f"{URL_PREFIX}/sync", "sync"),
         tab("Archiver", f"{URL_PREFIX}/archive", "archive"),
+        tab("Audit Log", f"{URL_PREFIX}/audit", "audit"),
         cls="flex gap-1 border-b border-border mb-6",
     )
 
@@ -394,19 +401,20 @@ def _tick(ok: bool, label: str, msg: str) -> P:
     )
 
 
-def _pending(idx: int) -> Div:
+def _pending(idx: int, op_id: str) -> Div:
     """A self-firing placeholder that runs auto-step ``idx`` once inserted.
 
     ``hx_trigger=load`` posts to the step endpoint the moment this lands in the DOM,
     and the response replaces this element (outerHTML) with the step's tick + the
-    next pending placeholder — chaining the steps sequentially without SSE.
+    next pending placeholder — chaining the steps sequentially without SSE. ``op_id``
+    is carried through the chain so every step is audited under one operation.
     """
     label = AUTO_STEPS[idx][0]
     return Div(
         Span(cls="spinner"),
         Span(f" {label}…", cls="ml-2 text-sm text-muted-foreground"),
         id=f"auto-pending-{idx}",
-        hx_post=f"/sync/auto/{idx}",
+        hx_post=f"/sync/auto/{idx}?op_id={op_id}",
         hx_trigger="load",
         hx_target=f"#auto-pending-{idx}",
         hx_swap="outerHTML",
@@ -502,12 +510,16 @@ def sync_page():
 
 
 @rt("/sync/auto/{idx}")
-def sync_auto(idx: int):
+def sync_auto(idx: int, op_id: str = ""):
+    # A fresh run starts at idx 0 with no op_id; mint one and carry it through the chain.
+    if not op_id:
+        op_id = uuid.uuid4().hex[:12]
     label, func = AUTO_STEPS[idx]
     ok, msg = func()
+    log_audit_step(op_id, "sync", "auto-sync", idx, label, ok, msg)
     parts = [_tick(ok, label, msg)]
     if ok and idx + 1 < len(AUTO_STEPS):
-        parts.append(_pending(idx + 1))
+        parts.append(_pending(idx + 1, op_id))
     elif ok:
         parts.append(P("✓ Auto-sync complete.", cls="text-success font-bold mt-2"))
     else:
@@ -569,34 +581,15 @@ def pull_jelly_header():
 @rt("/rename")
 def rename(current_file: str, proposed: str):
     logger.debug("/rename: request received current_file='%s' proposed='%s'", current_file, proposed)
-    ok, message = rename_movie(current_file, proposed)
-    logger.debug("/rename: result ok=%s message='%s'", ok, message)
-    if ok:
-        m = {
-            "current_file": proposed,
-            "title": "",
-            "year": None,
-            "ext": "",
-            "proposed": proposed,
-            "has_metadata": True,
-            "exists_on_disk": True,
-            "collision": False,
-        }
-    else:
-        m = next(
-            (x for x in get_transcoded_movies() if x["current_file"] == current_file),
-            {
-                "current_file": current_file,
-                "title": "",
-                "year": None,
-                "ext": "",
-                "proposed": proposed,
-                "has_metadata": True,
-                "exists_on_disk": True,
-                "collision": False,
-            },
-        )
-    return movie_row(m, status=message, ok=ok)
+    steps = rename_movie_steps(current_file, proposed)
+    op_id = uuid.uuid4().hex[:12]
+    log_audit_steps(op_id, "rename", current_file, steps)
+    rid = _row_id(current_file)
+    return _steps_result_row(
+        rid, steps, ncols=5,
+        success_msg=f"Renamed to {proposed}.",
+        fail_msg="Rename incomplete — see the state notes above for manual recovery.",
+    )
 
 
 @rt("/movie-delete")
@@ -715,12 +708,36 @@ def archive_table() -> Div:
 
 
 def _step_row(s: dict) -> P:
+    """Render one step. Accepts either a backend step dict (``label``) or an audit
+    row (``step_label``)."""
+    label = s.get("label", s.get("step_label", ""))
+    detail = s.get("detail", "")
+    state = s.get("current_state", "")
     icon = "✓" if s["ok"] else "✗"
     cls = "text-success" if s["ok"] else "text-destructive"
-    parts = [Span(f"{icon} ", cls=f"{cls} font-bold"), Strong(s["label"]), f" — {s['detail']}"]
-    if not s["ok"] and s.get("current_state"):
-        parts.append(Span(f" [{s['current_state']}]", cls="text-xs text-muted-foreground ml-1"))
+    parts = [Span(f"{icon} ", cls=f"{cls} font-bold"), Strong(label)]
+    if detail:
+        parts.append(f" — {detail}")
+    if not s["ok"] and state:
+        parts.append(Span(f" [{state}]", cls="text-xs text-muted-foreground ml-1"))
     return P(*parts, cls="my-0.5 text-sm")
+
+
+def _steps_result_row(rid: str, steps: list, ncols: int, success_msg: str, fail_msg: str) -> Tr:
+    """Replace a table row (id=``rid``) with a full-width step-by-step result.
+
+    Shared by the rename and archive actions so both show identical, transparent
+    step lists ending in a success or failure summary.
+    """
+    all_ok = all(s["ok"] for s in steps)
+    rows = [_step_row(s) for s in steps]
+    if all_ok:
+        rows.append(P(Span("✓ ", cls="text-success font-bold"), success_msg,
+                      cls="text-success text-sm mt-1 font-semibold"))
+    else:
+        rows.append(P(Span("✗ ", cls="text-destructive font-bold"), fail_msg,
+                      cls="text-destructive text-sm mt-1 font-semibold"))
+    return Tr(Td(*rows, colspan=str(ncols)), id=rid)
 
 
 @rt("/archive")
@@ -732,28 +749,56 @@ def archive_page():
 def archive_do(current_file: str):
     logger.debug("/archive/do: current_file='%s'", current_file)
     steps = archive_movie(current_file)
+    op_id = uuid.uuid4().hex[:12]
+    log_audit_steps(op_id, "archive", current_file, steps)
     rid = _archive_row_id(current_file)
-    all_ok = all(s["ok"] for s in steps)
-
-    result_rows = [_step_row(s) for s in steps]
-    if all_ok:
-        result_rows.append(
-            P(
-                Span("✓ ", cls="text-success font-bold"),
-                "Archive complete. Run a Kodi library scan to clean up the old entry.",
-                cls="text-success text-sm mt-1 font-semibold",
-            )
-        )
-    else:
-        result_rows.append(
-            P("See current_state details above for manual recovery.",
-              cls="text-destructive text-sm mt-1")
-        )
-
-    return Tr(
-        Td(*result_rows, colspan="5"),
-        id=rid,
+    return _steps_result_row(
+        rid, steps, ncols=5,
+        success_msg="Archive complete. Run a Kodi library scan to clean up the old entry.",
+        fail_msg="Archive incomplete — see the state notes above for manual recovery.",
     )
+
+
+# --- Audit Log tab ----------------------------------------------------------------
+
+
+def _audit_op_card(op: dict):
+    failed = next((s for s in op["steps"] if not s["ok"]), None)
+    if op["ok"]:
+        summary = Span(f"✓ OK ({len(op['steps'])} steps)",
+                       cls="text-success font-semibold text-sm")
+    else:
+        summary = Span(f"✗ FAILED at '{failed['step_label']}'",
+                       cls="text-destructive font-semibold text-sm")
+    head = Div(
+        Span(op["timestamp"] or "", cls="text-muted-foreground text-xs whitespace-nowrap"),
+        Span(op["action"], cls="uk-badge"),
+        Span(op["target"] or "", cls="text-sm font-mono"),
+        summary,
+        cls="flex flex-wrap items-center gap-x-3 gap-y-1 mb-1",
+    )
+    body = Div(*[_step_row(s) for s in op["steps"]], cls="ml-2 pl-3 border-l border-border")
+    return Div(head, body, cls="py-3 border-b border-border")
+
+
+def audit_tab() -> Div:
+    ops = get_audit_operations(limit=50)
+    header = Div(
+        Span(f"{len(ops)} recent operation(s)"),
+        Span("(UTC)", cls="text-muted-foreground text-xs ml-2"),
+        cls="flex items-center gap-2 mb-4",
+    )
+    if not ops:
+        return Div(header,
+                   P("No rename, archive, or sync operations recorded yet.",
+                     cls="text-muted-foreground"),
+                   id="audit")
+    return Div(header, *[_audit_op_card(op) for op in ops], id="audit")
+
+
+@rt("/audit")
+def audit_page():
+    return page("audit", audit_tab())
 
 
 def serve(host: str = "127.0.0.1", port: int = 5001):
