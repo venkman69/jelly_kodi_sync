@@ -22,7 +22,6 @@ from fasthtml.common import (
     H2,
     Hidden,
     Hr,
-    Input,
     Li,
     Meta,
     Ol,
@@ -30,13 +29,8 @@ from fasthtml.common import (
     Span,
     Strong,
     Style,
-    Table,
-    Tbody,
-    Td,
-    Th,
-    Thead,
+    Textarea,
     Title,
-    Tr,
     fast_app,
 )
 from monsterui.all import Button, ButtonT, Container, Theme, UkIcon
@@ -52,7 +46,9 @@ from .sqlite_util import (
 )
 from .sync_ops import (
     AUTO_STEPS,
-    jelly_library_refresh_step,
+    jelly_transcoded_refresh_step,
+    jelly_archive_refresh_step,
+    mark_archive_watched_step,
     kodi_library_scan_step,
     pull_jelly_step,
     pull_kodi_step,
@@ -69,7 +65,7 @@ logger = logging.getLogger(__name__)
 
 URL_PREFIX = os.getenv("URL_PREFIX", "").rstrip("/")
 
-# Only what FrankenUI/Tailwind can't handle: HTMX indicator + mobile table cards.
+# Only what FrankenUI/Tailwind can't handle: HTMX indicator + spinner.
 _htmx_css = Style(
     """
     .htmx-indicator { display: none; }
@@ -85,30 +81,9 @@ _htmx_css = Style(
         flex-shrink: 0;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    @media (max-width: 640px) {
-        .table-scroll table,
-        .table-scroll thead,
-        .table-scroll tbody,
-        .table-scroll tr,
-        .table-scroll td { display: block; width: 100%; }
-        .table-scroll thead { display: none; }
-        .table-scroll tr {
-            border: 1px solid hsl(var(--border));
-            border-radius: 0.5rem;
-            margin-bottom: 0.75rem;
-            padding: 0.5rem 0.75rem;
-        }
-        .table-scroll td { padding: 0.25rem 0; }
-        .table-scroll td::before {
-            content: attr(data-label);
-            display: block;
-            font-size: 0.7rem;
-            font-weight: bold;
-            text-transform: uppercase;
-            color: hsl(var(--muted-foreground));
-            margin-bottom: 0.1rem;
-        }
+    #staleness button.htmx-request svg {
+        animation: spin 0.6s linear infinite;
+        transform-origin: center;
     }
     """
 )
@@ -179,101 +154,121 @@ def _row_id(current_file: str) -> str:
     return "row-" + hashlib.md5(current_file.encode("utf-8")).hexdigest()[:12]
 
 
-def movie_row(m: dict, status: str = "", ok: bool | None = None) -> Tr:
-    """Render one table row for a misnamed movie (also used as the rename response)."""
+def _card_field(label: str, value, cls: str = "") -> Div:
+    """A labeled field inside a movie card: small uppercase label above the value.
+
+    ``break-words`` lets long filenames wrap within the card instead of overflowing,
+    which is the whole reason we moved off the width-constrained table columns.
+    """
+    return Div(
+        Span(label, cls="block text-[0.7rem] font-bold uppercase tracking-wide text-muted-foreground"),
+        Div(value, cls="text-sm break-words"),
+        cls=cls,
+    )
+
+
+def movie_card(m: dict, status: str = "", ok: bool | None = None) -> Div:
+    """Render one card for a misnamed movie (also used as the rename response).
+
+    Card (not table row) so each movie gets the full container width: the current
+    filename and the proposed-name textarea can use the whole card instead of a
+    cramped column, and the rename/delete actions sit centered below the name.
+    """
     rid = _row_id(m["current_file"])
 
     flags = []
     if not m["has_metadata"]:
-        flags.append(Span(" ⚠ no Jellyfin year", cls="text-destructive text-sm"))
+        flags.append(Span("⚠ no Jellyfin year", cls="text-destructive text-sm"))
     if not m["exists_on_disk"]:
-        flags.append(Span(" ⚠ not found on disk", cls="text-destructive text-sm"))
+        flags.append(Span("⚠ not found on disk", cls="text-destructive text-sm"))
     if m.get("collision"):
-        flags.append(Span(" ⚠ name conflict (duplicate target)", cls="text-destructive text-sm"))
-
-    if ok is True:
-        status_cell = Span(f"✓ {status}", cls="text-success text-sm")
-    elif ok is False:
-        status_cell = Span(f"✗ {status}", cls="text-destructive text-sm")
-    else:
-        status_cell = Span(status, cls="text-sm")
+        flags.append(Span("⚠ name conflict (duplicate target)", cls="text-destructive text-sm"))
 
     rename_fid = f"frename-{rid}"
     delete_fid = f"fdelete-{rid}"
     escaped = m["current_file"].replace("'", "\\'")
 
-    proposed_cell = Div(
-        Div(
-            Input(
-                name="proposed",
-                value=m["proposed"],
-                placeholder="Title_(YEAR).ext",
-                form=rename_fid,
-                cls="uk-input flex-1 min-w-0",
-            ),
-            Div(
-                HtmlButton(
-                    "🧹",
-                    type="submit", form=rename_fid, title="Rename",
-                    style="background:none;border:none;padding:3px;cursor:pointer;font-size:0.85rem;line-height:1",
-                    onclick=f"var p=this.form&&this.form.elements['proposed'];return confirm('Rename {escaped} → ' + (p?p.value:'the proposed name') + '?')",
-                ),
-                HtmlButton(
-                    UkIcon("trash-2", cls="h-3 w-3"),
-                    type="submit", form=delete_fid,
-                    title="Delete file and sidecars",
-                    style="background:none;border:none;padding:3px;cursor:pointer;color:#f87171;line-height:1",
-                    onclick=f"return confirm('Delete {escaped} and all its sidecars?')",
-                ),
-                cls="flex flex-col gap-0.5 flex-shrink-0",
-            ),
-            cls="flex items-center gap-2",
+    # width:fit-content beats pico.css's default `button { width: 100% }`, which would
+    # otherwise stretch each button to fill and defeat the centering.
+    _action_style = (
+        "background:none;border:1px solid hsl(var(--border));border-radius:0.375rem;"
+        "padding:5px 22px;cursor:pointer;display:inline-flex;align-items:center;"
+        "justify-content:center;line-height:1.2;width:fit-content"
+    )
+    proposed_block = Div(
+        Span("Proposed name", cls="block text-[0.7rem] font-bold uppercase tracking-wide text-muted-foreground mb-1"),
+        # A textarea (not a single-line Input) so a long proposed filename wraps and is
+        # fully visible instead of clipping and forcing horizontal scroll.
+        Textarea(
+            m["proposed"],
+            name="proposed",
+            placeholder="Title_(YEAR).ext",
+            form=rename_fid,
+            rows=2,
+            cls="uk-textarea w-full min-w-0 resize-y",
         ),
-        *flags,
-        Form(Hidden(name="current_file", value=m["current_file"]),
-             id=rename_fid, hx_post="/rename",
-             hx_target=f"#{rid}", hx_swap="outerHTML"),
-        Form(Hidden(name="current_file", value=m["current_file"]),
-             id=delete_fid, hx_post="/movie-delete",
-             hx_target=f"#{rid}", hx_swap="outerHTML"),
+        Div(
+            HtmlButton(
+                "🧹",
+                type="submit", form=rename_fid, title="Rename",
+                style=_action_style + ";font-size:1rem",
+                onclick=f"var p=this.form&&this.form.elements['proposed'];return confirm('Rename {escaped} → ' + (p?p.value:'the proposed name') + '?')",
+            ),
+            HtmlButton(
+                UkIcon("trash-2", cls="h-4 w-4"),
+                type="submit", form=delete_fid,
+                title="Delete file and sidecars",
+                style=_action_style + ";color:#f87171",
+                onclick=f"return confirm('Delete {escaped} and all its sidecars?')",
+            ),
+            cls="flex justify-center gap-4 mt-2",
+        ),
+        *([Div(*flags, cls="flex flex-col gap-0.5 mt-2")] if flags else []),
     )
 
-    return Tr(
-        Td(m["current_file"], data_label="Current filename"),
-        Td(m["title"] or "—", data_label="Jellyfin title"),
-        Td(str(m["year"]) if m["year"] else "—", data_label="Year"),
-        Td(proposed_cell, data_label="Proposed name"),
-        Td(status_cell, data_label="Status"),
-        id=rid,
-    )
+    body = [
+        _card_field("Current filename", m["current_file"]),
+        Div(
+            _card_field("Jellyfin title", m["title"] or "—"),
+            _card_field("Year", str(m["year"]) if m["year"] else "—"),
+            cls="grid grid-cols-2 gap-3",
+        ),
+        proposed_block,
+    ]
+    if status:
+        icon, scls = (
+            ("✓ ", "text-success") if ok
+            else ("✗ ", "text-destructive") if ok is False
+            else ("", "")
+        )
+        body.append(Div(Span(f"{icon}{status}", cls=f"text-sm {scls}".strip())))
+    body.append(Form(Hidden(name="current_file", value=m["current_file"]),
+                     id=rename_fid, hx_post="/rename",
+                     hx_target=f"#{rid}", hx_swap="outerHTML"))
+    body.append(Form(Hidden(name="current_file", value=m["current_file"]),
+                     id=delete_fid, hx_post="/movie-delete",
+                     hx_target=f"#{rid}", hx_swap="outerHTML"))
+
+    return Div(*body, id=rid, cls="border border-border rounded-lg p-4 flex flex-col gap-3")
 
 
-def movies_table(oob: bool = False) -> Div:
-    """Misnamed-movie table. Data comes from the Jellyfin pull, so the header
-    "Pull from Jellyfin" icon refreshes this via an out-of-band swap (``oob``)."""
+def movies_list(oob: bool = False) -> Div:
+    """Misnamed-movie cards. Data comes from the Jellyfin pull, so the header
+    "Pull from Jellyfin" icon refreshes this via an out-of-band swap (``oob``).
+
+    A responsive card grid (1 column on phones, 2 on large screens) rather than a
+    table, so each movie's filename/proposed-name gets real width."""
     movies = get_transcoded_movies()
     header = Div(
         Span(f"{len(movies)} misnamed movie(s) in TRANSCODED"),
         cls="flex flex-wrap items-center gap-2 mb-4",
     )
-    table = Div(
-        Table(
-            Thead(
-                Tr(
-                    Th("Current filename"),
-                    Th("Jellyfin title"),
-                    Th("Year"),
-                    Th("Proposed name"),
-                    Th("Status"),
-                )
-            ),
-            Tbody(*[movie_row(m) for m in movies]),
-            cls="uk-table uk-table-divider uk-table-hover uk-table-small",
-        ),
-        cls="table-scroll",
+    cards = Div(
+        *[movie_card(m) for m in movies],
+        cls="grid grid-cols-1 lg:grid-cols-2 gap-4",
     )
     extra = {"hx_swap_oob": "true"} if oob else {}
-    return Div(header, table, id="movies", **extra)
+    return Div(header, cards, id="movies", **extra)
 
 
 def tab_nav(active: str) -> Div:
@@ -292,20 +287,64 @@ def tab_nav(active: str) -> Div:
         tab("Jelly-Kodi Sync", f"{URL_PREFIX}/sync", "sync"),
         tab("Archiver", f"{URL_PREFIX}/archive", "archive"),
         tab("Audit Log", f"{URL_PREFIX}/audit", "audit"),
-        cls="flex gap-1 border-b border-border mb-6",
+        # Desktop only; on mobile the tabs live in a fixed bottom bar (see
+        # mobile_tab_nav) so they never scroll off-screen.
+        cls="hidden md:flex gap-1 border-b border-border mb-6",
+    )
+
+
+# Shared tab definitions: (key, desktop label, mobile label, href, lucide icon).
+_TABS = [
+    ("renamer", "Movie Renamer", "Renamer", "/", "film"),
+    ("sync", "Jelly-Kodi Sync", "Sync", "/sync", "arrow-left-right"),
+    ("archive", "Archiver", "Archiver", "/archive", "archive"),
+    ("audit", "Audit Log", "Audit", "/audit", "history"),
+]
+
+
+def mobile_tab_nav(active: str) -> Div:
+    """Bottom-anchored tab bar for mobile (hidden on md+).
+
+    Fixed to the bottom of the viewport so tabs stay reachable and never scroll
+    off. Mirrors the scrapescore bottom-nav pattern: icon over a tiny label, the
+    active tab tinted with the primary color. Desktop uses ``tab_nav`` instead.
+    """
+
+    def item(key: str, mobile_label: str, href: str, icon: str) -> A:
+        state = (
+            "text-primary font-semibold" if active == key else "text-muted-foreground"
+        )
+        return A(
+            UkIcon(icon, cls="h-5 w-5"),
+            Span(mobile_label, cls="text-[10px] mt-0.5"),
+            href=f"{URL_PREFIX}{href}",
+            cls=f"flex-1 flex flex-col items-center py-2 {state}",
+        )
+
+    return Div(
+        *[item(key, mobile_label, href, icon) for key, _, mobile_label, href, icon in _TABS],
+        cls=(
+            "md:hidden fixed bottom-0 left-0 right-0 bg-background "
+            "border-t border-border flex z-50"
+        ),
     )
 
 
 def page(active: str, *content):
     return (
         Title("Jelly-Kodi Sync"),
-        Container(staleness_panel(), tab_nav(active), *content, cls="py-4"),
+        # pb-24 on mobile keeps content clear of the fixed bottom tab bar; md:pb-4
+        # restores normal spacing on desktop where the bottom bar is hidden.
+        Container(
+            staleness_panel(), tab_nav(active), *content, cls="pt-4 pb-24 md:pb-4"
+        ),
+        mobile_tab_nav(active),
     )
 
 
 @rt("/")
 def index():
-    return page("renamer", movies_table())
+    return page("renamer", movies_list())
 
 
 # --- Jelly-Kodi Sync tab ----------------------------------------------------------
@@ -476,7 +515,7 @@ def sync_tab() -> Div:
         P("Initiate Library Scans:", cls="text-sm font-semibold mb-2"),
         Div(
             _btn(
-                UkIcon("refresh-cw", cls="mr-1 h-4 w-4"), "Kodi library",
+                UkIcon("refresh-cw", cls="mr-1 h-4 w-4"), "Scan Kodi",
                 cls=ButtonT.secondary,
                 hx_post="/sync/refresh-kodi-library",
                 hx_target="#manual-result",
@@ -484,9 +523,29 @@ def sync_tab() -> Div:
                 hx_indicator="#manual-spinner",
             ),
             _btn(
-                UkIcon("refresh-cw", cls="mr-1 h-4 w-4"), "Jellyfin library",
+                UkIcon("refresh-cw", cls="mr-1 h-4 w-4"), "Scan Transcoded",
                 cls=ButtonT.secondary,
-                hx_post="/sync/refresh-jelly-library",
+                hx_post="/sync/refresh-jelly-transcoded",
+                hx_target="#manual-result",
+                hx_swap="innerHTML",
+                hx_indicator="#manual-spinner",
+            ),
+            _btn(
+                UkIcon("refresh-cw", cls="mr-1 h-4 w-4"), "Scan Archive",
+                cls=ButtonT.secondary,
+                hx_post="/sync/refresh-jelly-archive",
+                hx_target="#manual-result",
+                hx_swap="innerHTML",
+                hx_indicator="#manual-spinner",
+            ),
+            cls="flex flex-wrap gap-2 mb-4",
+        ),
+        P("Archive maintenance:", cls="text-sm font-semibold mb-2"),
+        Div(
+            _btn(
+                UkIcon("check", cls="mr-1 h-4 w-4"), "Mark Archive Watched",
+                cls=ButtonT.secondary,
+                hx_post="/sync/mark-archive-watched",
                 hx_target="#manual-result",
                 hx_swap="innerHTML",
                 hx_indicator="#manual-spinner",
@@ -543,13 +602,25 @@ def sync_pull_jelly():
 @rt("/sync/refresh-kodi-library")
 def sync_refresh_kodi_library():
     ok, msg = kodi_library_scan_step()
-    return _tick(ok, "Kodi library", msg)
+    return _tick(ok, "Scan Kodi", msg)
 
 
-@rt("/sync/refresh-jelly-library")
-def sync_refresh_jelly_library():
-    ok, msg = jelly_library_refresh_step()
-    return _tick(ok, "Jellyfin library", msg)
+@rt("/sync/refresh-jelly-transcoded")
+def sync_refresh_jelly_transcoded():
+    ok, msg = jelly_transcoded_refresh_step()
+    return _tick(ok, "Scan Transcoded", msg)
+
+
+@rt("/sync/refresh-jelly-archive")
+def sync_refresh_jelly_archive():
+    ok, msg = jelly_archive_refresh_step()
+    return _tick(ok, "Scan Archive", msg)
+
+
+@rt("/sync/mark-archive-watched")
+def sync_mark_archive_watched():
+    ok, msg = mark_archive_watched_step()
+    return _tick(ok, "Mark Archive Watched", msg)
 
 
 @rt("/sync/push-jelly")
@@ -575,18 +646,21 @@ def pull_jelly_header():
     pull_jelly_step()
     # Also refresh the renamer table (Jellyfin data drives it) via OOB swap; the
     # swap is dropped harmlessly on tabs where #movies isn't in the DOM.
-    return staleness_panel(), movies_table(oob=True)
+    return staleness_panel(), movies_list(oob=True)
 
 
 @rt("/rename")
 def rename(current_file: str, proposed: str):
+    # The proposed name now comes from a <textarea>, which can carry stray newlines
+    # (wrapping/paste/Enter); a filename must stay single-line, so flatten and trim.
+    proposed = " ".join(proposed.split())
     logger.debug("/rename: request received current_file='%s' proposed='%s'", current_file, proposed)
     steps = rename_movie_steps(current_file, proposed)
     op_id = uuid.uuid4().hex[:12]
     log_audit_steps(op_id, "rename", current_file, steps)
     rid = _row_id(current_file)
-    return _steps_result_row(
-        rid, steps, ncols=5,
+    return _steps_result_card(
+        rid, steps,
         success_msg=f"Renamed to {proposed}.",
         fail_msg="Rename incomplete — see the state notes above for manual recovery.",
     )
@@ -599,13 +673,13 @@ def movie_delete(current_file: str):
     logger.debug("/movie-delete: result ok=%s message='%s'", ok, message)
     if ok:
         rid = _row_id(current_file)
-        return Tr(id=rid, style="display:none")
+        return Div(id=rid, style="display:none")
     m = next(
         (x for x in get_transcoded_movies() if x["current_file"] == current_file),
         {"current_file": current_file, "title": "", "year": None, "ext": "",
          "proposed": "", "has_metadata": False, "exists_on_disk": True, "collision": False},
     )
-    return movie_row(m, status=message, ok=False)
+    return movie_card(m, status=message, ok=False)
 
 
 # --- Archiver tab -----------------------------------------------------------------
@@ -615,35 +689,39 @@ def _archive_row_id(current_file: str) -> str:
     return "archrow-" + hashlib.md5(current_file.encode("utf-8")).hexdigest()[:12]
 
 
-def archive_row(m: dict) -> Tr:
+def archive_card(m: dict) -> Div:
+    """Render one card for a fully-watched movie eligible for archiving."""
     rid = _archive_row_id(m["current_file"])
 
     watch_badges = Div(
         *(
-            [Span("Jelly", cls="text-xs bg-blue-900 text-blue-200 px-1 rounded")]
+            [Span("Jelly", cls="text-xs bg-blue-900 text-blue-200 px-1.5 py-0.5 rounded")]
             if m["jelly_watched"] else []
         ),
         *(
-            [Span("Kodi", cls="text-xs bg-green-900 text-green-200 px-1 rounded")]
+            [Span("Kodi", cls="text-xs bg-green-900 text-green-200 px-1.5 py-0.5 rounded")]
             if m["kodi_watched"] else []
         ),
         cls="flex gap-1",
     )
 
     if m["needs_rename"]:
-        action_cell = Span("⚠ Rename first", cls="text-yellow-400 text-sm",
-                           title="Go to Movie Renamer tab to rename this file")
+        action = Span("⚠ Rename first", cls="text-yellow-400 text-sm",
+                      title="Go to Movie Renamer tab to rename this file")
     elif not m["exists_on_disk"]:
-        action_cell = Span("⚠ Not found on disk", cls="text-destructive text-sm")
+        action = Span("⚠ Not found on disk", cls="text-destructive text-sm")
     else:
         escaped = m["current_file"].replace("'", "\\'")
         archive_fid = f"farchive-{rid}"
-        action_cell = Div(
+        action = Div(
             HtmlButton(
-                UkIcon("archive", cls="h-3 w-3"),
+                UkIcon("archive", cls="h-4 w-4 mr-1"), "Archive",
                 type="submit", form=archive_fid,
                 title="Archive movie and sidecars",
-                style="background:none;border:none;padding:3px;cursor:pointer;color:#60a5fa;line-height:1",
+                # width:fit-content beats pico's `button { width: 100% }` (see movie_card).
+                style="background:none;border:1px solid hsl(var(--border));border-radius:0.375rem;"
+                      "padding:5px 22px;cursor:pointer;color:#60a5fa;display:inline-flex;"
+                      "align-items:center;line-height:1.2;width:fit-content",
                 onclick=f"return confirm('Archive {escaped} to ARCHIVE directory?')",
             ),
             Form(
@@ -656,17 +734,21 @@ def archive_row(m: dict) -> Tr:
             ),
         )
 
-    return Tr(
-        Td(m["current_file"], data_label="Filename"),
-        Td(m["title"] or "—", data_label="Title"),
-        Td(str(m["year"]) if m["year"] else "—", data_label="Year"),
-        Td(watch_badges, data_label="Watched by"),
-        Td(action_cell, data_label="Action"),
+    return Div(
+        _card_field("Filename", m["current_file"]),
+        Div(
+            _card_field("Title", m["title"] or "—"),
+            _card_field("Year", str(m["year"]) if m["year"] else "—"),
+            cls="grid grid-cols-2 gap-3",
+        ),
+        _card_field("Watched by", watch_badges),
+        Div(action, cls="flex justify-center mt-1"),
         id=rid,
+        cls="border border-border rounded-lg p-4 flex flex-col gap-3",
     )
 
 
-def archive_table() -> Div:
+def archive_list() -> Div:
     archive_root = os.getenv("ARCHIVE", "")
     if not archive_root:
         return Div(
@@ -690,21 +772,15 @@ def archive_table() -> Div:
             id="archive-movies",
         )
 
-    table = Div(
-        Table(
-            Thead(Tr(
-                Th("Filename"), Th("Title"), Th("Year"), Th("Watched by"), Th("Action"),
-            )),
-            Tbody(*[archive_row(m) for m in movies]),
-            cls="uk-table uk-table-divider uk-table-hover uk-table-small",
-        ),
-        cls="table-scroll",
+    cards = Div(
+        *[archive_card(m) for m in movies],
+        cls="grid grid-cols-1 lg:grid-cols-2 gap-4",
     )
     note = P(
         "After archiving, run a Kodi library scan to remove the old entry from Kodi's library.",
         cls="text-muted-foreground text-sm mt-4",
     )
-    return Div(header, table, note, id="archive-movies")
+    return Div(header, cards, note, id="archive-movies")
 
 
 def _step_row(s: dict) -> P:
@@ -723,8 +799,8 @@ def _step_row(s: dict) -> P:
     return P(*parts, cls="my-0.5 text-sm")
 
 
-def _steps_result_row(rid: str, steps: list, ncols: int, success_msg: str, fail_msg: str) -> Tr:
-    """Replace a table row (id=``rid``) with a full-width step-by-step result.
+def _steps_result_card(rid: str, steps: list, success_msg: str, fail_msg: str) -> Div:
+    """Replace a movie card (id=``rid``) with a step-by-step result card.
 
     Shared by the rename and archive actions so both show identical, transparent
     step lists ending in a success or failure summary.
@@ -737,12 +813,12 @@ def _steps_result_row(rid: str, steps: list, ncols: int, success_msg: str, fail_
     else:
         rows.append(P(Span("✗ ", cls="text-destructive font-bold"), fail_msg,
                       cls="text-destructive text-sm mt-1 font-semibold"))
-    return Tr(Td(*rows, colspan=str(ncols)), id=rid)
+    return Div(*rows, id=rid, cls="border border-border rounded-lg p-4")
 
 
 @rt("/archive")
 def archive_page():
-    return page("archive", archive_table())
+    return page("archive", archive_list())
 
 
 @rt("/archive/do")
@@ -752,8 +828,8 @@ def archive_do(current_file: str):
     op_id = uuid.uuid4().hex[:12]
     log_audit_steps(op_id, "archive", current_file, steps)
     rid = _archive_row_id(current_file)
-    return _steps_result_row(
-        rid, steps, ncols=5,
+    return _steps_result_card(
+        rid, steps,
         success_msg="Archive complete. Run a Kodi library scan to clean up the old entry.",
         fail_msg="Archive incomplete — see the state notes above for manual recovery.",
     )

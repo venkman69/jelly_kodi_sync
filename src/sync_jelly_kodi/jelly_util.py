@@ -155,19 +155,17 @@ def _get_virtual_folder_item_id(session: JellySession, library_name: str) -> str
     return None
 
 
-def jelly_library_refresh() -> tuple[bool, str]:
-    """Trigger a targeted Jellyfin scan of the TRANSCODED library (MoviesNew by default).
+def jelly_library_refresh(library_name: str) -> tuple[bool, str]:
+    """Trigger a targeted Jellyfin scan of the named library.
 
     Looks up the library's ItemId via GET /Library/VirtualFolders, then calls
     POST /Items/{id}/Refresh?Recursive=true which scans only that library.
     Falls back to a full POST /Library/Refresh if the named library is not found.
 
-    The library name is controlled by the JELLYFIN_TRANSCODED_LIBRARY env var
-    (default: "MoviesNew").
+    The caller supplies the library name (e.g. the transcoded or archive library).
 
     Returns (success, message).
     """
-    library_name = os.getenv("JELLYFIN_TRANSCODED_LIBRARY", "MoviesNew")
     jellyfin_url = os.getenv("JELLYFIN_URL")
     api_key = os.getenv("JELLYFIN_API_KEY")
     if not jellyfin_url or not api_key:
@@ -194,6 +192,64 @@ def jelly_library_refresh() -> tuple[bool, str]:
         return True, f"Library '{library_name}' not found — full Jellyfin refresh triggered instead"
     logger.warning("Jellyfin full refresh returned status %d", response.status_code)
     return False, f"Jellyfin full refresh returned unexpected status {response.status_code}"
+
+
+def mark_library_played(library_name: str) -> tuple[bool, str]:
+    """Mark every movie in the named Jellyfin library as played, for ALL users.
+
+    Looks up the library's virtual-folder ItemId, then for each user enumerates the
+    movies under it (GET /Users/{id}/Items?ParentId=...) and marks any not-yet-played
+    item as played via update_playback_position (play_count=1, position=0 -> Played).
+
+    Honors DRY_RUN: when set, logs intended writes but makes no API calls.
+
+    Returns (success, message).
+    """
+    dry_run = os.getenv("DRY_RUN", "false") == "true"
+    jellyfin_url = os.getenv("JELLYFIN_URL")
+    api_key = os.getenv("JELLYFIN_API_KEY")
+    if not jellyfin_url or not api_key:
+        raise ValueError("JELLYFIN_URL and JELLYFIN_API_KEY must be set in environment variables.")
+    session = JellySession(jellyfin_url, api_key)
+
+    item_id = _get_virtual_folder_item_id(session, library_name)
+    if not item_id:
+        return False, f"Archive library '{library_name}' not found in Jellyfin"
+
+    users = get_users(session)
+    marked = considered = 0
+    for user in users:
+        user_id = user["Id"]
+        resp = session.get(
+            f"/Users/{user_id}/Items",
+            params={
+                "ParentId": item_id,
+                "Recursive": "true",
+                "IncludeItemTypes": "Movie",
+                "Fields": "UserData",
+            },
+        )
+        resp.raise_for_status()
+        movies = resp.json().get("Items", [])
+        logger.info("mark_library_played: user '%s' has %d movie(s) in '%s'",
+                    user["Name"], len(movies), library_name)
+        for movie in movies:
+            considered += 1
+            if movie.get("UserData", {}).get("Played"):
+                continue  # already watched — skip needless write
+            if dry_run:
+                logger.info("Dry-Run: would mark '%s' played for user '%s'",
+                            movie.get("Name"), user["Name"])
+                marked += 1
+                continue
+            if update_playback_position(session, user_id, movie["Id"], 0, play_count=1):
+                marked += 1
+            else:
+                logger.warning("Failed to mark '%s' played for user '%s'",
+                               movie.get("Name"), user["Name"])
+
+    verb = "would mark" if dry_run else "marked"
+    return True, f"{verb.capitalize()} {marked} of {considered} archive movie(s) played across {len(users)} user(s)"
 
 
 def jelly_pull()->bool:

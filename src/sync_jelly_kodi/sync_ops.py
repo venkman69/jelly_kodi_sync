@@ -13,7 +13,9 @@ import logging
 import os
 
 from . import jelly_util, kodi_util
-from .jelly_util import JellySession, jelly_pull, jelly_library_refresh
+from .jelly_util import (
+    JellySession, jelly_pull, jelly_library_refresh, mark_library_played,
+)
 from .kodi_util import getKodi, kodi_pull, kodi_library_scan
 from .sqlite_util import find_jelly_items_by_file, find_kodi_items_by_file
 
@@ -98,12 +100,28 @@ def kodi_library_scan_step() -> tuple[bool, str]:
         return False, f"Kodi library scan failed: {e}"
 
 
-def jelly_library_refresh_step() -> tuple[bool, str]:
+def jelly_transcoded_refresh_step() -> tuple[bool, str]:
     try:
-        return jelly_library_refresh()
+        return jelly_library_refresh(os.getenv("JELLYFIN_TRANSCODED_LIBRARY", "MoviesNew"))
     except Exception as e:  # noqa: BLE001
-        logger.exception("Jellyfin library refresh failed")
-        return False, f"Jellyfin library refresh failed: {e}"
+        logger.exception("Jellyfin transcoded library refresh failed")
+        return False, f"Jellyfin transcoded refresh failed: {e}"
+
+
+def jelly_archive_refresh_step() -> tuple[bool, str]:
+    try:
+        return jelly_library_refresh(os.getenv("JELLYFIN_ARCHIVE_LIBRARY", "Movies"))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Jellyfin archive library refresh failed")
+        return False, f"Jellyfin archive refresh failed: {e}"
+
+
+def mark_archive_watched_step() -> tuple[bool, str]:
+    try:
+        return mark_library_played(os.getenv("JELLYFIN_ARCHIVE_LIBRARY", "Movies"))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Mark archive watched failed")
+        return False, f"Mark archive watched failed: {e}"
 
 
 def preflight_kodi_step() -> tuple[bool, str]:
@@ -153,13 +171,16 @@ def push_kodi_to_jelly_step() -> tuple[bool, str]:
         return False, f"Push Kodi → Jellyfin failed: {e}"
 
 
-# Ordered auto-sync sequence, mirroring the CLI ``sync`` command's 8 steps
-# (the "find watched items" reads are folded into the push steps that consume them).
+# Ordered auto-sync sequence. Both sides are pulled up front (steps 2-3) so the
+# kodiitems and jellyitems tables are fresh BEFORE any push — the pushes match items
+# by reading these tables (set_watch_from_*_to_* -> find_*_items_by_file), so a stale
+# or never-pulled Kodi table would otherwise cause Push Jellyfin -> Kodi to match
+# nothing. The final re-pulls refresh the DB to reflect the post-push state.
 AUTO_STEPS: list[tuple[str, callable]] = [
     ("Preflight: check Kodi is reachable", preflight_kodi_step),
     ("Pull from Jellyfin", pull_jelly_step),
-    ("Push Jellyfin → Kodi", push_jelly_to_kodi_step),
     ("Pull from Kodi", pull_kodi_step),
+    ("Push Jellyfin → Kodi", push_jelly_to_kodi_step),
     ("Push Kodi → Jellyfin", push_kodi_to_jelly_step),
     ("Re-pull Jellyfin", pull_jelly_step),
     ("Re-pull Kodi", pull_kodi_step),
