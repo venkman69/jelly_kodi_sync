@@ -646,15 +646,16 @@ def sync_push_kodi():
 @rt("/pull-kodi")
 def pull_kodi_header():
     ok, msg = pull_kodi_step()
-    return staleness_panel(failure_msg="" if ok else msg)
+    # Kodi watched-status drives the archiver; OOB swap is a no-op on other tabs.
+    return staleness_panel(failure_msg="" if ok else msg), archive_list(oob=True)
 
 
 @rt("/pull-jelly")
 def pull_jelly_header():
     ok, msg = pull_jelly_step()
-    # Also refresh the renamer table (Jellyfin data drives it) via OOB swap; the
-    # swap is dropped harmlessly on tabs where #movies isn't in the DOM.
-    return staleness_panel(failure_msg="" if ok else msg), movies_list(oob=True)
+    # Jellyfin data drives both the renamer and the archiver; OOB swaps are
+    # dropped harmlessly on tabs where those elements aren't in the DOM.
+    return staleness_panel(failure_msg="" if ok else msg), movies_list(oob=True), archive_list(oob=True)
 
 
 @rt("/rename")
@@ -758,7 +759,8 @@ def archive_card(m: dict) -> Div:
     )
 
 
-def archive_list() -> Div:
+def archive_list(oob: bool = False) -> Div:
+    extra = {"hx_swap_oob": "true"} if oob else {}
     archive_root = os.getenv("ARCHIVE", "")
     if not archive_root:
         return Div(
@@ -768,6 +770,7 @@ def archive_list() -> Div:
                 cls="text-destructive",
             ),
             id="archive-movies",
+            **extra,
         )
 
     movies = get_watched_transcoded_movies()
@@ -780,6 +783,7 @@ def archive_list() -> Div:
             header,
             P("No fully-watched movies found in TRANSCODED.", cls="text-muted-foreground"),
             id="archive-movies",
+            **extra,
         )
 
     cards = Div(
@@ -790,7 +794,7 @@ def archive_list() -> Div:
         "After archiving, run a Kodi library scan to remove the old entry from Kodi's library.",
         cls="text-muted-foreground text-sm mt-4",
     )
-    return Div(header, cards, note, id="archive-movies")
+    return Div(header, cards, note, id="archive-movies", **extra)
 
 
 def _step_row(s: dict) -> P:
