@@ -385,8 +385,9 @@ def _fmt_age(ts: str | None) -> tuple[str, str]:
     return text, cls
 
 
-def _pull_btn(label: str, route: str) -> HtmlButton:
+def _pull_btn(label: str, route: str, color: str = "") -> HtmlButton:
     """Tiny inline refresh icon button for the staleness bar."""
+    color_style = f"color:{color};" if color else ""
     return HtmlButton(
         UkIcon("refresh-cw", cls="h-3 w-3"),
         hx_post=route,
@@ -395,8 +396,27 @@ def _pull_btn(label: str, route: str) -> HtmlButton:
         hx_disabled_elt="this",
         title=f"Pull from {label}",
         style=(
-            "background:none;border:none;padding:2px 3px;cursor:pointer;"
-            "line-height:1;vertical-align:middle;opacity:0.6"
+            f"background:none;border:none;padding:2px 3px;cursor:pointer;"
+            f"line-height:1;vertical-align:middle;opacity:0.7;{color_style}"
+        ),
+    )
+
+
+def _scan_btn(label: str, route: str, color: str = "") -> HtmlButton:
+    """Tiny labeled library-scan button for the staleness bar."""
+    color_style = f"color:{color};" if color else ""
+    return HtmlButton(
+        UkIcon("refresh-cw", cls="h-3 w-3"),
+        Span(label, cls="ml-0.5 font-bold"),
+        hx_post=route,
+        hx_target="#header-scan-result",
+        hx_swap="innerHTML",
+        hx_disabled_elt="this",
+        title=f"Scan {label} library",
+        style=(
+            f"background:none;border:none;padding:2px 4px;cursor:pointer;"
+            f"line-height:1;vertical-align:middle;opacity:0.7;"
+            f"display:inline-flex;align-items:center;gap:2px;{color_style}"
         ),
     )
 
@@ -409,13 +429,18 @@ def staleness_panel(oob: bool = False, failure_msg: str = "") -> Div:
     extra = {"hx_swap_oob": "true"} if oob else {}
     error = [Span(f"✗ {failure_msg}", cls="text-destructive ml-2")] if failure_msg else []
     return Div(
-        Span("Kodi: ", cls="text-muted-foreground"),
+        Span("Kodi: ", style="color:#1BBBE9;font-weight:bold"),
         Span(kodi_age, cls=kodi_cls),
-        _pull_btn("Kodi", "/pull-kodi"),
-        Span("Jellyfin: ", cls="text-muted-foreground ml-3"),
+        _pull_btn("Kodi", "/pull-kodi", color="#1BBBE9"),
+        Span("Jellyfin: ", cls="ml-3", style="color:#AA5CC3;font-weight:bold"),
         Span(jelly_age, cls=jelly_cls),
-        _pull_btn("Jellyfin", "/pull-jelly"),
+        _pull_btn("Jellyfin", "/pull-jelly", color="#AA5CC3"),
         *error,
+        Span("|", cls="text-muted-foreground mx-1 select-none opacity-30"),
+        _scan_btn("Kodi", "/sync/refresh-kodi-library", color="#1BBBE9"),
+        _scan_btn("Trans", "/sync/refresh-jelly-transcoded", color="#AA5CC3"),
+        _scan_btn("Arch", "/sync/refresh-jelly-archive", color="#AA5CC3"),
+        Span(id="header-scan-result"),
         A(
             Span(UkIcon("sun", cls="h-4 w-4"), cls="theme-sun"),
             Span(UkIcon("moon", cls="h-4 w-4"), cls="theme-moon"),
@@ -495,13 +520,14 @@ def sync_tab() -> Div:
     manual_section = Div(
         H2("Manual Controls", cls="text-xl font-semibold mt-2 mb-2"),
         P(
-            "Use the pull buttons in the header to refresh data, then push in the "
-            "direction you want. Pushes compare whatever is currently in the database.",
+            "Use the pull and scan buttons in the header to refresh data, then push in "
+            "the direction you want. Pushes compare whatever is currently in the database.",
             cls="mb-3",
         ),
         Div(
             _btn(
-                UkIcon("shuffle", cls="mr-1 h-4 w-4"), "to Jellyfin",
+                UkIcon("shuffle", cls="mr-1 h-4 w-4"),
+                Span("to Jellyfin", style="color:#AA5CC3;font-weight:bold"),
                 cls=ButtonT.secondary,
                 hx_post="/sync/push-jelly",
                 hx_target="#manual-result",
@@ -509,37 +535,10 @@ def sync_tab() -> Div:
                 hx_indicator="#manual-spinner",
             ),
             _btn(
-                UkIcon("shuffle", cls="mr-1 h-4 w-4"), "to Kodi",
+                UkIcon("shuffle", cls="mr-1 h-4 w-4"),
+                Span("to Kodi", style="color:#1BBBE9;font-weight:bold"),
                 cls=ButtonT.secondary,
                 hx_post="/sync/push-kodi",
-                hx_target="#manual-result",
-                hx_swap="innerHTML",
-                hx_indicator="#manual-spinner",
-            ),
-            cls="flex flex-wrap gap-2 mb-4",
-        ),
-        P("Initiate Library Scans:", cls="text-sm font-semibold mb-2"),
-        Div(
-            _btn(
-                UkIcon("refresh-cw", cls="mr-1 h-4 w-4"), "Scan Kodi",
-                cls=ButtonT.secondary,
-                hx_post="/sync/refresh-kodi-library",
-                hx_target="#manual-result",
-                hx_swap="innerHTML",
-                hx_indicator="#manual-spinner",
-            ),
-            _btn(
-                UkIcon("refresh-cw", cls="mr-1 h-4 w-4"), "Scan Transcoded",
-                cls=ButtonT.secondary,
-                hx_post="/sync/refresh-jelly-transcoded",
-                hx_target="#manual-result",
-                hx_swap="innerHTML",
-                hx_indicator="#manual-spinner",
-            ),
-            _btn(
-                UkIcon("refresh-cw", cls="mr-1 h-4 w-4"), "Scan Archive",
-                cls=ButtonT.secondary,
-                hx_post="/sync/refresh-jelly-archive",
                 hx_target="#manual-result",
                 hx_swap="innerHTML",
                 hx_indicator="#manual-spinner",
@@ -608,19 +607,22 @@ def sync_pull_jelly():
 @rt("/sync/refresh-kodi-library")
 def sync_refresh_kodi_library():
     ok, msg = kodi_library_scan_step()
-    return _tick(ok, "Scan Kodi", msg)
+    cls = "text-success ml-1" if ok else "text-destructive ml-1"
+    return Span(("✓" if ok else "✗") + f" Kodi: {msg}", cls=cls)
 
 
 @rt("/sync/refresh-jelly-transcoded")
 def sync_refresh_jelly_transcoded():
     ok, msg = jelly_transcoded_refresh_step()
-    return _tick(ok, "Scan Transcoded", msg)
+    cls = "text-success ml-1" if ok else "text-destructive ml-1"
+    return Span(("✓" if ok else "✗") + f" Trans: {msg}", cls=cls)
 
 
 @rt("/sync/refresh-jelly-archive")
 def sync_refresh_jelly_archive():
     ok, msg = jelly_archive_refresh_step()
-    return _tick(ok, "Scan Archive", msg)
+    cls = "text-success ml-1" if ok else "text-destructive ml-1"
+    return Span(("✓" if ok else "✗") + f" Arch: {msg}", cls=cls)
 
 
 @rt("/sync/mark-archive-watched")
@@ -701,11 +703,13 @@ def archive_card(m: dict) -> Div:
 
     watch_badges = Div(
         *(
-            [Span("Jelly", cls="text-xs bg-blue-900 text-blue-200 px-1.5 py-0.5 rounded")]
+            [Span("Jellyfin", cls="text-xs font-bold px-1.5 py-0.5 rounded",
+                  style="background:rgba(170,92,195,0.2);color:#AA5CC3")]
             if m["jelly_watched"] else []
         ),
         *(
-            [Span("Kodi", cls="text-xs bg-green-900 text-green-200 px-1.5 py-0.5 rounded")]
+            [Span("Kodi", cls="text-xs font-bold px-1.5 py-0.5 rounded",
+                  style="background:rgba(27,187,233,0.2);color:#1BBBE9")]
             if m["kodi_watched"] else []
         ),
         cls="flex gap-1",
