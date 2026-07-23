@@ -85,6 +85,10 @@ _htmx_css = Style(
         animation: spin 0.6s linear infinite;
         transform-origin: center;
     }
+    /* Brighter red for error/warning text — the default --destructive is too dark,
+       especially in dark mode where hsl(0 62.8% 30.6%) is nearly invisible. */
+    .text-destructive { color: hsl(0 80% 50%) !important; }
+    .dark .text-destructive { color: hsl(0 85% 58%) !important; }
     """
 )
 
