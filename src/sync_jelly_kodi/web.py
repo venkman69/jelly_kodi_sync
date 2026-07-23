@@ -9,6 +9,7 @@ Run via the CLI: ``uv run sync-jelly-kodi web``.
 import hashlib
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fasthtml.common import (
@@ -39,7 +40,8 @@ from fasthtml.common import (
 )
 from monsterui.all import Button, ButtonT, Container, Theme, UkIcon
 
-from . import jelly_util, utils
+from . import utils
+from .movie_archive import archive_movie, get_watched_transcoded_movies
 from .movie_rename import delete_movie, get_transcoded_movies, rename_movie
 from .sqlite_util import get_last_pull_times
 from .sync_ops import (
@@ -117,11 +119,41 @@ def _prefix_script():
     """),)
 
 
+# Light/dark theme toggle (ported from scrapescore). Persists to FrankenUI's
+# ``__FRANKEN__`` localStorage key that ``Theme.slate.headers()`` reads on load, and
+# swaps the sun/moon glyphs so only one shows. Re-synced on htmx:afterSettle because
+# the toggle lives in the staleness header, which is OOB-swapped after pulls.
+_theme_toggle_script = Script("""
+function _syncTheme() {
+    const isDark = document.documentElement.classList.contains('dark');
+    // FrankenUI themes via the .dark class, but the CDN-loaded pico.css / daisyUI
+    // auto-dark via @media (prefers-color-scheme: dark) unless data-theme is set.
+    // Mirror the .dark class onto data-theme so an OS-dark user forced to light
+    // doesn't get light-on-white headings and unreadable table text.
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    document.querySelectorAll('.theme-sun').forEach(el => el.classList.toggle('hidden', isDark));
+    document.querySelectorAll('.theme-moon').forEach(el => el.classList.toggle('hidden', !isDark));
+}
+function toggleTheme() {
+    const html = document.documentElement;
+    const f = JSON.parse(localStorage.getItem('__FRANKEN__') || '{}');
+    const nowDark = html.classList.toggle('dark');
+    f.mode = nowDark ? 'dark' : 'light';
+    localStorage.setItem('__FRANKEN__', JSON.stringify(f));
+    _syncTheme();
+}
+_syncTheme();  // run immediately (head) to set data-theme before first paint
+document.addEventListener('DOMContentLoaded', _syncTheme);
+document.addEventListener('htmx:afterSettle', _syncTheme);
+""")
+
+
 app, rt = fast_app(
     hdrs=(
         Meta(name="viewport", content="width=device-width, initial-scale=1"),
         *Theme.slate.headers(),
         _htmx_css,
+        _theme_toggle_script,
         *_prefix_script(),
     ),
     bodycls="bg-background text-foreground",
@@ -210,25 +242,12 @@ def movie_row(m: dict, status: str = "", ok: bool | None = None) -> Tr:
     )
 
 
-def movies_table() -> Div:
+def movies_table(oob: bool = False) -> Div:
+    """Misnamed-movie table. Data comes from the Jellyfin pull, so the header
+    "Pull from Jellyfin" icon refreshes this via an out-of-band swap (``oob``)."""
     movies = get_transcoded_movies()
     header = Div(
         Span(f"{len(movies)} misnamed movie(s) in TRANSCODED"),
-        _btn(
-            UkIcon("refresh-cw", cls="mr-2 h-4 w-4"),
-            "Refresh from Jellyfin",
-            cls=ButtonT.primary,
-            hx_post="/refresh",
-            hx_target="#movies",
-            hx_swap="outerHTML",
-            hx_indicator="#refresh-spinner",
-        ),
-        Span(
-            Span(cls="spinner"),
-            Span(" Refreshing…", cls="ml-2 text-sm text-muted-foreground"),
-            id="refresh-spinner",
-            cls="htmx-indicator",
-        ),
         cls="flex flex-wrap items-center gap-2 mb-4",
     )
     table = Div(
@@ -247,7 +266,8 @@ def movies_table() -> Div:
         ),
         cls="table-scroll",
     )
-    return Div(header, table, id="movies")
+    extra = {"hx_swap_oob": "true"} if oob else {}
+    return Div(header, table, id="movies", **extra)
 
 
 def tab_nav(active: str) -> Div:
@@ -264,6 +284,7 @@ def tab_nav(active: str) -> Div:
     return Div(
         tab("Movie Renamer", f"{URL_PREFIX}/", "renamer"),
         tab("Jelly-Kodi Sync", f"{URL_PREFIX}/sync", "sync"),
+        tab("Archiver", f"{URL_PREFIX}/archive", "archive"),
         cls="flex gap-1 border-b border-border mb-6",
     )
 
@@ -271,7 +292,7 @@ def tab_nav(active: str) -> Div:
 def page(active: str, *content):
     return (
         Title("Jelly-Kodi Sync"),
-        Container(tab_nav(active), *content, cls="py-4"),
+        Container(staleness_panel(), tab_nav(active), *content, cls="py-4"),
     )
 
 
@@ -283,26 +304,76 @@ def index():
 # --- Jelly-Kodi Sync tab ----------------------------------------------------------
 
 
-def _fmt_ts(ts: str | None) -> str:
-    return ts if ts else "never"
+def _fmt_age(ts: str | None) -> tuple[str, str]:
+    """Return (age_text, css_class) for a UTC pull timestamp string.
+
+    Colors: green-ish default (<1 h), amber warning (1–24 h), red stale (>24 h).
+    """
+    if ts is None:
+        return "never", "text-destructive font-semibold"
+    try:
+        pulled = datetime.fromisoformat(ts).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return ts, "text-muted-foreground"
+    secs = max(0, int((datetime.now(timezone.utc) - pulled).total_seconds()))
+    days, rem = divmod(secs, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours or days:
+        parts.append(f"{hours}h")
+    parts.append(f"{minutes}m")
+    text = " ".join(parts) + " ago"
+    if secs > 86400:
+        cls = "text-destructive font-semibold"
+    elif secs > 3600:
+        cls = "text-amber-400 font-semibold"
+    else:
+        cls = "text-muted-foreground"
+    return text, cls
+
+
+def _pull_btn(label: str, route: str) -> HtmlButton:
+    """Tiny inline refresh icon button for the staleness bar."""
+    return HtmlButton(
+        UkIcon("refresh-cw", cls="h-3 w-3"),
+        hx_post=route,
+        hx_target="#staleness",
+        hx_swap="outerHTML",
+        hx_disabled_elt="this",
+        title=f"Pull from {label}",
+        style=(
+            "background:none;border:none;padding:2px 3px;cursor:pointer;"
+            "line-height:1;vertical-align:middle;opacity:0.6"
+        ),
+    )
 
 
 def staleness_panel(oob: bool = False) -> Div:
-    """Show when each side's data was last pulled.
-
-    When ``oob`` is set, the panel replaces the existing ``#staleness`` element via
-    an out-of-band swap after a pull refreshes the data.
-    """
+    """Pull-freshness bar shown on every tab; updated out-of-band after syncs."""
     times = get_last_pull_times()
+    kodi_age, kodi_cls = _fmt_age(times["kodi"])
+    jelly_age, jelly_cls = _fmt_age(times["jelly"])
     extra = {"hx_swap_oob": "true"} if oob else {}
     return Div(
-        Span(Span("Kodi last pulled: "), Strong(_fmt_ts(times["kodi"])),
-             cls="whitespace-nowrap"),
-        Span(Span("Jellyfin last pulled: "), Strong(_fmt_ts(times["jelly"])),
-             cls="whitespace-nowrap"),
-        Span("(UTC)", cls="text-muted-foreground text-xs whitespace-nowrap"),
+        Span("Kodi: ", cls="text-muted-foreground"),
+        Span(kodi_age, cls=kodi_cls),
+        _pull_btn("Kodi", "/pull-kodi"),
+        Span("Jellyfin: ", cls="text-muted-foreground ml-3"),
+        Span(jelly_age, cls=jelly_cls),
+        _pull_btn("Jellyfin", "/pull-jelly"),
+        A(
+            Span(UkIcon("sun", cls="h-4 w-4"), cls="theme-sun"),
+            Span(UkIcon("moon", cls="h-4 w-4"), cls="theme-moon"),
+            href="#",
+            onclick="toggleTheme(); return false;",
+            title="Toggle theme",
+            cls="ml-auto flex items-center opacity-60 hover:opacity-100",
+        ),
         id="staleness",
-        cls="flex flex-wrap gap-x-4 gap-y-1 items-center p-3 bg-muted rounded-lg mb-6",
+        cls="flex flex-wrap items-center gap-x-1 gap-y-0.5 px-3 py-1.5 bg-muted rounded-lg text-xs mb-3",
         **extra,
     )
 
@@ -344,8 +415,10 @@ def _pending(idx: int) -> Div:
 
 
 def _btn(*args, cls="", **kwargs):
-    """Sync-tab button: inline-flex via style attr beats UIkit's dynamically-injected
-    display:flex!important from core.iife.js, keeping buttons content-wide in flex rows."""
+    """Compact button used across all tabs. ``uk-btn-sm`` shrinks the padding/font;
+    inline-flex via style attr beats UIkit's dynamically-injected display:flex!important
+    from core.iife.js, keeping buttons content-wide in flex rows."""
+    cls = f"{cls} {ButtonT.sm}".strip()
     return Button(*args, cls=cls, style="display: inline-flex; width: fit-content", **kwargs)
 
 
@@ -359,7 +432,7 @@ def sync_tab() -> Div:
         _btn(
             UkIcon("arrow-left-right", cls="mr-2 h-4 w-4"),
             "Sync",
-            cls=ButtonT.primary,
+            cls=ButtonT.secondary,
             hx_post="/sync/auto/0",
             hx_target="#auto-results",
             hx_swap="innerHTML",
@@ -369,27 +442,11 @@ def sync_tab() -> Div:
     manual_section = Div(
         H2("Manual Controls", cls="text-xl font-semibold mt-2 mb-2"),
         P(
-            "Pull each side first (check the freshness above), then push in the "
+            "Use the pull buttons in the header to refresh data, then push in the "
             "direction you want. Pushes compare whatever is currently in the database.",
             cls="mb-3",
         ),
         Div(
-            _btn(
-                UkIcon("download", cls="mr-1 h-4 w-4"), "from Kodi",
-                cls=ButtonT.secondary,
-                hx_post="/sync/pull-kodi",
-                hx_target="#manual-result",
-                hx_swap="innerHTML",
-                hx_indicator="#manual-spinner",
-            ),
-            _btn(
-                UkIcon("download", cls="mr-1 h-4 w-4"), "from Jellyfin",
-                cls=ButtonT.secondary,
-                hx_post="/sync/pull-jelly",
-                hx_target="#manual-result",
-                hx_swap="innerHTML",
-                hx_indicator="#manual-spinner",
-            ),
             _btn(
                 UkIcon("shuffle", cls="mr-1 h-4 w-4"), "to Jellyfin",
                 cls=ButtonT.secondary,
@@ -406,12 +463,13 @@ def sync_tab() -> Div:
                 hx_swap="innerHTML",
                 hx_indicator="#manual-spinner",
             ),
-            cls="flex flex-wrap gap-2 mb-2",
+            cls="flex flex-wrap gap-2 mb-4",
         ),
+        P("Initiate Library Scans:", cls="text-sm font-semibold mb-2"),
         Div(
             _btn(
                 UkIcon("refresh-cw", cls="mr-1 h-4 w-4"), "Kodi library",
-                cls=ButtonT.ghost,
+                cls=ButtonT.secondary,
                 hx_post="/sync/refresh-kodi-library",
                 hx_target="#manual-result",
                 hx_swap="innerHTML",
@@ -419,7 +477,7 @@ def sync_tab() -> Div:
             ),
             _btn(
                 UkIcon("refresh-cw", cls="mr-1 h-4 w-4"), "Jellyfin library",
-                cls=ButtonT.ghost,
+                cls=ButtonT.secondary,
                 hx_post="/sync/refresh-jelly-library",
                 hx_target="#manual-result",
                 hx_swap="innerHTML",
@@ -435,7 +493,7 @@ def sync_tab() -> Div:
         ),
         Div(id="manual-result", cls="mt-4"),
     )
-    return Div(staleness_panel(), auto_section, Hr(), manual_section)
+    return Div(auto_section, Hr(), manual_section)
 
 
 @rt("/sync")
@@ -494,6 +552,20 @@ def sync_push_kodi():
     return _tick(ok, "to Kodi", msg)
 
 
+@rt("/pull-kodi")
+def pull_kodi_header():
+    pull_kodi_step()
+    return staleness_panel()
+
+
+@rt("/pull-jelly")
+def pull_jelly_header():
+    pull_jelly_step()
+    # Also refresh the renamer table (Jellyfin data drives it) via OOB swap; the
+    # swap is dropped harmlessly on tabs where #movies isn't in the DOM.
+    return staleness_panel(), movies_table(oob=True)
+
+
 @rt("/rename")
 def rename(current_file: str, proposed: str):
     logger.debug("/rename: request received current_file='%s' proposed='%s'", current_file, proposed)
@@ -543,19 +615,145 @@ def movie_delete(current_file: str):
     return movie_row(m, status=message, ok=False)
 
 
-@rt("/refresh")
-def refresh():
-    logger.info("Refreshing Jellyfin data via jelly_pull()")
-    try:
-        jelly_util.jelly_pull()
-    except Exception as e:  # noqa: BLE001
-        logger.error("jelly_pull failed: %s", e)
-        return Div(
-            P(f"Refresh failed: {e}", cls="text-destructive"),
-            movies_table(),
-            id="movies",
+# --- Archiver tab -----------------------------------------------------------------
+
+
+def _archive_row_id(current_file: str) -> str:
+    return "archrow-" + hashlib.md5(current_file.encode("utf-8")).hexdigest()[:12]
+
+
+def archive_row(m: dict) -> Tr:
+    rid = _archive_row_id(m["current_file"])
+
+    watch_badges = Div(
+        *(
+            [Span("Jelly", cls="text-xs bg-blue-900 text-blue-200 px-1 rounded")]
+            if m["jelly_watched"] else []
+        ),
+        *(
+            [Span("Kodi", cls="text-xs bg-green-900 text-green-200 px-1 rounded")]
+            if m["kodi_watched"] else []
+        ),
+        cls="flex gap-1",
+    )
+
+    if m["needs_rename"]:
+        action_cell = Span("⚠ Rename first", cls="text-yellow-400 text-sm",
+                           title="Go to Movie Renamer tab to rename this file")
+    elif not m["exists_on_disk"]:
+        action_cell = Span("⚠ Not found on disk", cls="text-destructive text-sm")
+    else:
+        escaped = m["current_file"].replace("'", "\\'")
+        archive_fid = f"farchive-{rid}"
+        action_cell = Div(
+            HtmlButton(
+                UkIcon("archive", cls="h-3 w-3"),
+                type="submit", form=archive_fid,
+                title="Archive movie and sidecars",
+                style="background:none;border:none;padding:3px;cursor:pointer;color:#60a5fa;line-height:1",
+                onclick=f"return confirm('Archive {escaped} to ARCHIVE directory?')",
+            ),
+            Form(
+                Hidden(name="current_file", value=m["current_file"]),
+                id=archive_fid,
+                hx_post="/archive/do",
+                hx_target=f"#{rid}",
+                hx_swap="outerHTML",
+                hx_disabled_elt="find button",
+            ),
         )
-    return movies_table()
+
+    return Tr(
+        Td(m["current_file"], data_label="Filename"),
+        Td(m["title"] or "—", data_label="Title"),
+        Td(str(m["year"]) if m["year"] else "—", data_label="Year"),
+        Td(watch_badges, data_label="Watched by"),
+        Td(action_cell, data_label="Action"),
+        id=rid,
+    )
+
+
+def archive_table() -> Div:
+    archive_root = os.getenv("ARCHIVE", "")
+    if not archive_root:
+        return Div(
+            P(
+                "⚠ ARCHIVE environment variable is not configured. "
+                "Set it to the local path of your archive directory.",
+                cls="text-destructive",
+            ),
+            id="archive-movies",
+        )
+
+    movies = get_watched_transcoded_movies()
+    header = Div(
+        Span(f"{len(movies)} fully-watched movie(s) in TRANSCODED"),
+        cls="flex flex-wrap items-center gap-2 mb-4",
+    )
+    if not movies:
+        return Div(
+            header,
+            P("No fully-watched movies found in TRANSCODED.", cls="text-muted-foreground"),
+            id="archive-movies",
+        )
+
+    table = Div(
+        Table(
+            Thead(Tr(
+                Th("Filename"), Th("Title"), Th("Year"), Th("Watched by"), Th("Action"),
+            )),
+            Tbody(*[archive_row(m) for m in movies]),
+            cls="uk-table uk-table-divider uk-table-hover uk-table-small",
+        ),
+        cls="table-scroll",
+    )
+    note = P(
+        "After archiving, run a Kodi library scan to remove the old entry from Kodi's library.",
+        cls="text-muted-foreground text-sm mt-4",
+    )
+    return Div(header, table, note, id="archive-movies")
+
+
+def _step_row(s: dict) -> P:
+    icon = "✓" if s["ok"] else "✗"
+    cls = "text-success" if s["ok"] else "text-destructive"
+    parts = [Span(f"{icon} ", cls=f"{cls} font-bold"), Strong(s["label"]), f" — {s['detail']}"]
+    if not s["ok"] and s.get("current_state"):
+        parts.append(Span(f" [{s['current_state']}]", cls="text-xs text-muted-foreground ml-1"))
+    return P(*parts, cls="my-0.5 text-sm")
+
+
+@rt("/archive")
+def archive_page():
+    return page("archive", archive_table())
+
+
+@rt("/archive/do")
+def archive_do(current_file: str):
+    logger.debug("/archive/do: current_file='%s'", current_file)
+    steps = archive_movie(current_file)
+    rid = _archive_row_id(current_file)
+    all_ok = all(s["ok"] for s in steps)
+
+    result_rows = [_step_row(s) for s in steps]
+    if all_ok:
+        result_rows.append(
+            P(
+                Span("✓ ", cls="text-success font-bold"),
+                "Archive complete. Run a Kodi library scan to clean up the old entry.",
+                cls="text-success text-sm mt-1 font-semibold",
+            )
+        )
+    else:
+        result_rows.append(
+            P("See current_state details above for manual recovery.",
+              cls="text-destructive text-sm mt-1")
+        )
+
+    return Tr(
+        Td(*result_rows, colspan="5"),
+        id=rid,
+    )
 
 
 def serve(host: str = "127.0.0.1", port: int = 5001):
