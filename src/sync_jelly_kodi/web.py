@@ -10,7 +10,6 @@ import hashlib
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
 from fasthtml.common import (
@@ -125,6 +124,33 @@ def _prefix_script():
 # ``__FRANKEN__`` localStorage key that ``Theme.slate.headers()`` reads on load, and
 # swaps the sun/moon glyphs so only one shows. Re-synced on htmx:afterSettle because
 # the toggle lives in the staleness header, which is OOB-swapped after pulls.
+_age_script = Script("""
+function _fmtAge(isoStr) {
+    if (!isoStr) return { text: 'never', cls: 'text-destructive font-semibold' };
+    const secs = Math.max(0, Math.floor((Date.now() - new Date(isoStr + 'Z').getTime()) / 1000));
+    const d = Math.floor(secs / 86400), rem1 = secs % 86400;
+    const h = Math.floor(rem1 / 3600), m = Math.floor((rem1 % 3600) / 60);
+    const parts = [];
+    if (d) parts.push(d + 'd');
+    if (h || d) parts.push(h + 'h');
+    parts.push(m + 'm');
+    const cls = secs > 86400 ? 'text-destructive font-semibold'
+              : secs > 3600  ? 'text-amber-400 font-semibold'
+              : 'text-muted-foreground';
+    return { text: parts.join(' ') + ' ago', cls };
+}
+function _updateAges() {
+    document.querySelectorAll('[data-ts]').forEach(el => {
+        const { text, cls } = _fmtAge(el.dataset.ts);
+        el.textContent = text;
+        el.className = cls;
+    });
+}
+document.addEventListener('DOMContentLoaded', _updateAges);
+document.addEventListener('htmx:afterSettle', _updateAges);
+setInterval(_updateAges, 60000);
+""")
+
 _theme_toggle_script = Script("""
 function _syncTheme() {
     const isDark = document.documentElement.classList.contains('dark');
@@ -156,6 +182,7 @@ app, rt = fast_app(
         Link(rel="icon", type="image/svg+xml", href=_favicon_href),
         *Theme.slate.headers(),
         _htmx_css,
+        _age_script,
         _theme_toggle_script,
         *_prefix_script(),
     ),
@@ -372,36 +399,6 @@ def index():
 # --- Jelly-Kodi Sync tab ----------------------------------------------------------
 
 
-def _fmt_age(ts: str | None) -> tuple[str, str]:
-    """Return (age_text, css_class) for a UTC pull timestamp string.
-
-    Colors: green-ish default (<1 h), amber warning (1–24 h), red stale (>24 h).
-    """
-    if ts is None:
-        return "never", "text-destructive font-semibold"
-    try:
-        pulled = datetime.fromisoformat(ts).replace(tzinfo=timezone.utc)
-    except ValueError:
-        return ts, "text-muted-foreground"
-    secs = max(0, int((datetime.now(timezone.utc) - pulled).total_seconds()))
-    days, rem = divmod(secs, 86400)
-    hours, rem = divmod(rem, 3600)
-    minutes = rem // 60
-    parts = []
-    if days:
-        parts.append(f"{days}d")
-    if hours or days:
-        parts.append(f"{hours}h")
-    parts.append(f"{minutes}m")
-    text = " ".join(parts) + " ago"
-    if secs > 86400:
-        cls = "text-destructive font-semibold"
-    elif secs > 3600:
-        cls = "text-amber-400 font-semibold"
-    else:
-        cls = "text-muted-foreground"
-    return text, cls
-
 
 def _pull_btn(label: str, route: str, color: str = "") -> HtmlButton:
     """Tiny inline refresh icon button for the staleness bar."""
@@ -442,16 +439,14 @@ def _scan_btn(label: str, route: str, color: str = "", icon: str = "refresh-cw")
 def staleness_panel(oob: bool = False, failure_msg: str = "") -> Div:
     """Pull-freshness bar shown on every tab; updated out-of-band after syncs."""
     times = get_last_pull_times()
-    kodi_age, kodi_cls = _fmt_age(times["kodi"])
-    jelly_age, jelly_cls = _fmt_age(times["jelly"])
     extra = {"hx_swap_oob": "true"} if oob else {}
     error = [Span(f"✗ {failure_msg}", cls="text-destructive ml-2")] if failure_msg else []
     return Div(
         Span("Kodi: ", style="color:#1BBBE9;font-weight:bold"),
-        Span(kodi_age, cls=kodi_cls),
+        Span("", id="kodi-age", data_ts=times["kodi"] or ""),
         _pull_btn("Kodi", "/pull-kodi", color="#1BBBE9"),
         Span("Jellyfin: ", cls="ml-3", style="color:#AA5CC3;font-weight:bold"),
-        Span(jelly_age, cls=jelly_cls),
+        Span("", id="jelly-age", data_ts=times["jelly"] or ""),
         _pull_btn("Jellyfin", "/pull-jelly", color="#AA5CC3"),
         *error,
         Span("|", cls="text-muted-foreground mx-1 select-none opacity-30"),
