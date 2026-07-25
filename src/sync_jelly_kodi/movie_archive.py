@@ -29,10 +29,11 @@ def _transcoded_dir() -> str:
 def get_watched_transcoded_movies() -> list[dict]:
     """Return fully-watched TRANSCODED movies, deduped by unified_file.
 
-    Checks Jellyfin (PlayCount > 0 for any user) and Kodi (playcount > 0) — a
-    movie qualifies if either source reports it as watched. Non-kodi-named files
-    are included but flagged with ``needs_rename=True``.
+    A movie qualifies when JELLYFIN_SYNC_USER has PlayCount > 0 and no active resume
+    position in Jellyfin. Kodi watch state is shown for reference only. Non-kodi-named
+    files are included but flagged with ``needs_rename=True``.
     """
+    sync_user = os.getenv("JELLYFIN_SYNC_USER", "")
     conn = get_sqlite_connection()
     cursor = conn.cursor()
 
@@ -62,38 +63,33 @@ def get_watched_transcoded_movies() -> list[dict]:
         title = row[1] or ""
         year = row[2]
 
-        # Jellyfin: any user has fully watched (PlayCount > 0)
+        # Jellyfin: sync user has fully watched (PlayCount > 0)
         cursor.execute("""
             SELECT COUNT(*) FROM jellyitems
             WHERE unified_file = ?
+              AND user_name = ?
               AND json_extract(userdata_json, '$.PlayCount') > 0
-        """, (unified_file,))
+        """, (unified_file, sync_user))
         jelly_played = cursor.fetchone()[0] > 0
 
-        # Jellyfin: any user still has an in-progress position
+        # Jellyfin: sync user still has an in-progress position
         cursor.execute("""
             SELECT COUNT(*) FROM jellyitems
             WHERE unified_file = ?
+              AND user_name = ?
               AND json_extract(userdata_json, '$.PlaybackPositionTicks') > 0
-        """, (unified_file,))
+        """, (unified_file, sync_user))
         jelly_in_progress = cursor.fetchone()[0] > 0
 
-        # Kodi: playcount > 0 and no active resume position
-        kodi_items = find_kodi_items_by_file(unified_file)
-        kodi_played = any(k.get("playcount", 0) > 0 for k in kodi_items)
-        kodi_in_progress = any(
-            k.get("resume", {}).get("position", 0.0) > 0 for k in kodi_items
-        )
-
-        # A non-zero resume position anywhere means the movie is still in progress —
-        # do not propose archiving even if PlayCount > 0.
-        any_in_progress = jelly_in_progress or kodi_in_progress
-        any_played = jelly_played or kodi_played
-        if not any_played or any_in_progress:
+        if not jelly_played or jelly_in_progress:
             continue
 
-        jelly_watched = jelly_played and not jelly_in_progress
-        kodi_watched = kodi_played and not kodi_in_progress
+        jelly_watched = True
+        kodi_items = find_kodi_items_by_file(unified_file)
+        kodi_watched = (
+            any(k.get("playcount", 0) > 0 for k in kodi_items)
+            and not any(k.get("resume", {}).get("position", 0.0) > 0 for k in kodi_items)
+        )
 
         _, ext = os.path.splitext(current_file)
         ext = ext.lstrip(".")
