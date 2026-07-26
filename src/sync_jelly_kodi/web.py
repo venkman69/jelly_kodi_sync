@@ -863,11 +863,13 @@ def _step_row(s: dict) -> P:
     return P(*parts, cls="my-0.5 text-sm")
 
 
-def _steps_result_card(rid: str, steps: list, success_msg: str, fail_msg: str) -> Div:
+def _steps_result_card(rid: str, steps: list, success_msg: str, fail_msg: str,
+                       footer=None) -> Div:
     """Replace a movie card (id=``rid``) with a step-by-step result card.
 
     Shared by the rename and archive actions so both show identical, transparent
-    step lists ending in a success or failure summary.
+    step lists ending in a success or failure summary. Pass ``footer`` to append
+    an extra element (e.g. a dismiss button) after the summary line.
     """
     all_ok = all(s["ok"] for s in steps)
     rows = [_step_row(s) for s in steps]
@@ -877,6 +879,8 @@ def _steps_result_card(rid: str, steps: list, success_msg: str, fail_msg: str) -
     else:
         rows.append(P(Span("✗ ", cls="text-destructive font-bold"), fail_msg,
                       cls="text-destructive text-sm mt-1 font-semibold"))
+    if footer is not None:
+        rows.append(footer)
     return Div(*rows, id=rid, cls="border border-border rounded-lg p-4")
 
 
@@ -936,12 +940,37 @@ def archive_mark_unwatched(current_file: str):
     op_id = uuid.uuid4().hex[:12]
     log_audit_steps(op_id, "unwatch", current_file, steps)
 
-    result_card = _steps_result_card(
-        rid, steps,
-        success_msg="Marked unwatched — removed from archive proposals.",
-        fail_msg="Unwatch incomplete — some systems may still show it as watched.",
+    dismiss_fid = f"fdismiss-{rid}"
+    dismiss_footer = Div(
+        Form(
+            Hidden(name="current_file", value=current_file),
+            id=dismiss_fid,
+            hx_post="/archive/dismiss",
+            hx_target=f"#{rid}",
+            hx_swap="outerHTML",
+        ),
+        HtmlButton(
+            "OK",
+            type="submit", form=dismiss_fid,
+            style="margin-top:0.5rem;background:none;border:1px solid hsl(var(--border));"
+                  "border-radius:0.375rem;padding:4px 18px;cursor:pointer;"
+                  "color:hsl(var(--foreground));font-size:0.85rem",
+        ),
+        cls="mt-2",
     )
-    return result_card, archive_list(oob=True)
+    return _steps_result_card(
+        rid, steps,
+        success_msg="Marked unwatched — click OK to dismiss.",
+        fail_msg="Unwatch incomplete — some systems may still show it as watched.",
+        footer=dismiss_footer,
+    )
+
+
+@rt("/archive/dismiss")
+def archive_dismiss(current_file: str):
+    """User has read the unwatch result — remove the card and refresh the archive list."""
+    rid = _archive_row_id(current_file)
+    return Div(id=rid), archive_list(oob=True)
 
 
 # --- Audit Log tab ----------------------------------------------------------------
