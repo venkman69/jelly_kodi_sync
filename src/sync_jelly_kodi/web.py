@@ -550,6 +550,7 @@ def sync_tab() -> Div:
                 hx_target="#manual-result",
                 hx_swap="innerHTML",
                 hx_indicator="#manual-spinner",
+                hx_sync="#manual-result:queue first",
             ),
             _btn(
                 UkIcon("shuffle", cls="mr-1 h-4 w-4"),
@@ -559,6 +560,7 @@ def sync_tab() -> Div:
                 hx_target="#manual-result",
                 hx_swap="innerHTML",
                 hx_indicator="#manual-spinner",
+                hx_sync="#manual-result:queue first",
             ),
             cls="flex flex-wrap gap-2 mb-4",
         ),
@@ -571,6 +573,7 @@ def sync_tab() -> Div:
                 hx_target="#manual-result",
                 hx_swap="innerHTML",
                 hx_indicator="#manual-spinner",
+                hx_sync="#manual-result:queue first",
             ),
             cls="flex flex-wrap gap-2",
         ),
