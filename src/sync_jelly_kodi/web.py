@@ -926,13 +926,9 @@ def archive_mark_unwatched(current_file: str):
     op_id = uuid.uuid4().hex[:12]
     log_audit_steps(op_id, "unwatch", current_file, steps)
 
-    if jelly_ok and kodi_ok:
-        logger.info("/archive/mark-unwatched: success for '%s'", current_file)
-        return Div(id=rid, style="display:none")
-
     return _steps_result_card(
         rid, steps,
-        success_msg="",
+        success_msg="Marked unwatched. Pull from Jellyfin to refresh the proposals list.",
         fail_msg="Unwatch incomplete — some systems may still show it as watched.",
     )
 
