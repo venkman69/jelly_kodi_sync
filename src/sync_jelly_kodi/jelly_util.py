@@ -9,7 +9,7 @@ import os
 from .sqlite_util import (
     upsert_jelly_items, get_watched_jelly_items,
     find_jelly_items_by_file, get_all_jelly_item_ids,
-    delete_stale_jelly_items
+    delete_stale_jelly_items,
 )
 from .utils import convert_windows_to_unix_path, load_dotenvs
 
@@ -35,6 +35,10 @@ class JellySession(object):
     def post(self, endpoint, **kwargs):
         url = urljoin(self.jellyfin_url, endpoint)
         return self.session.post(url, **kwargs)
+
+    def delete(self, endpoint, **kwargs):
+        url = urljoin(self.jellyfin_url, endpoint)
+        return self.session.delete(url, **kwargs)
 
 
 def seconds_to_ticks(seconds: float) -> int:
@@ -250,6 +254,62 @@ def mark_library_played(library_name: str) -> tuple[bool, str]:
 
     verb = "would mark" if dry_run else "marked"
     return True, f"{verb.capitalize()} {marked} of {considered} archive movie(s) played across {len(users)} user(s)"
+
+
+def mark_item_unplayed(session: JellySession, user_id: str, item_id: str) -> bool:
+    """Mark a single Jellyfin item as unplayed for one user."""
+    url = f"/Users/{user_id}/Items/{item_id}/UserData"
+    payload = {"PlaybackPositionTicks": 0, "PlayCount": 0, "Played": False}
+    try:
+        response = session.post(url, json=payload)
+        if response.status_code == 200:
+            return True
+        logger.warning("mark_item_unplayed: unexpected status %d for item %s user %s",
+                       response.status_code, item_id, user_id)
+        return False
+    except requests.exceptions.RequestException as e:
+        logger.warning("mark_item_unplayed: request error: %s", e)
+        return False
+
+
+def mark_file_unwatched_jellyfin(unified_file: str) -> tuple[bool, str]:
+    """Clear watched state in Jellyfin for every user who has this file in the DB.
+
+    Uses the local jellyitems cache (no additional Jellyfin pull needed). Returns
+    (True, message) if at least one user was cleared, (False, reason) otherwise.
+    """
+    jellyfin_url = os.getenv("JELLYFIN_URL")
+    api_key = os.getenv("JELLYFIN_API_KEY")
+    if not jellyfin_url or not api_key:
+        return False, "JELLYFIN_URL and JELLYFIN_API_KEY must be set in environment variables."
+    session = JellySession(jellyfin_url, api_key)
+
+    items = find_jelly_items_by_file(unified_file)
+    if not items:
+        return False, f"No Jellyfin items found in DB for '{unified_file}'"
+
+    cleared = failed = 0
+    for item in items:
+        user_id = item.get("UserId") or item.get("user_id")
+        item_id = item.get("Id") or item.get("id")
+        user_name = item.get("UserName") or item.get("user_name", user_id)
+        if not user_id or not item_id:
+            logger.warning("mark_file_unwatched_jellyfin: missing UserId/Id for item in DB")
+            failed += 1
+            continue
+        if mark_item_unplayed(session, user_id, item_id):
+            logger.info("mark_file_unwatched_jellyfin: cleared '%s' for user '%s'", unified_file, user_name)
+            cleared += 1
+        else:
+            logger.warning("mark_file_unwatched_jellyfin: failed for user '%s'", user_name)
+            failed += 1
+
+    if failed and not cleared:
+        return False, f"Failed to clear watched state for all {failed} user item(s)"
+    msg = f"Cleared {cleared} Jellyfin user item(s)"
+    if failed:
+        msg += f" ({failed} failed)"
+    return True, msg
 
 
 def jelly_pull()->bool:

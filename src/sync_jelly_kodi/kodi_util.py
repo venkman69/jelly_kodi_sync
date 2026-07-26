@@ -150,6 +150,41 @@ def get_watched_items_from_db():
     result = get_watched_kodi_items()
     return result
 
+def mark_movie_unwatched_kodi(unified_file: str) -> tuple[bool, str]:
+    """Clear watched state in Kodi for all movies matching unified_file.
+
+    Looks up the file in the local kodiitems cache and calls SetMovieDetails for
+    each matching movie. Returns (True, message) on success or (False, reason).
+    """
+    kodi_items = find_kodi_items_by_file(unified_file)
+    movies = [k for k in kodi_items if "movieid" in k]
+    if not movies:
+        logger.info("mark_movie_unwatched_kodi: no Kodi movie found for '%s'", unified_file)
+        return True, "No Kodi movie entry found (skipped)"
+
+    mk = getKodi()
+    cleared = failed = 0
+    for movie in movies:
+        movie_id = movie["movieid"]
+        try:
+            mk.VideoLibrary.SetMovieDetails(
+                movieid=movie_id, playcount=0, resume={"position": 0, "total": 0}
+            )
+            logger.info("mark_movie_unwatched_kodi: cleared movieid=%s ('%s')",
+                        movie_id, movie.get("title", ""))
+            cleared += 1
+        except Exception as e:
+            logger.warning("mark_movie_unwatched_kodi: failed for movieid=%s: %s", movie_id, e)
+            failed += 1
+
+    if failed and not cleared:
+        return False, f"Failed to clear Kodi watch state for {failed} movie(s)"
+    msg = f"Cleared {cleared} Kodi movie(s)"
+    if failed:
+        msg += f" ({failed} failed)"
+    return True, msg
+
+
 def sync_watch_status_from_jelly_to_kodi(jelly_item:dict, kodi_item:dict):
     """using kodi api set the playcount and resume.position in kodi based on jellyfin item"""
     dry_run = os.getenv("DRY_RUN", "false") == "true"

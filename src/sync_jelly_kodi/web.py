@@ -37,6 +37,8 @@ from monsterui.all import Button, ButtonT, Container, Theme, UkIcon
 
 from . import utils
 from .movie_archive import archive_movie, get_watched_transcoded_movies
+from .jelly_util import mark_file_unwatched_jellyfin
+from .kodi_util import mark_movie_unwatched_kodi
 from .movie_rename import delete_movie, get_transcoded_movies, rename_movie_steps
 from .sqlite_util import (
     get_audit_operations,
@@ -723,29 +725,51 @@ def archive_card(m: dict) -> Div:
     """Render one card for a fully-watched movie eligible for archiving."""
     rid = _archive_row_id(m["current_file"])
 
+    jelly_watched_by = m.get("jelly_watched_by") or []
     watch_badges = Div(
         *(
-            [Span("Jellyfin", cls="text-xs font-bold px-1.5 py-0.5 rounded",
-                  style="background:rgba(170,92,195,0.2);color:#AA5CC3")]
-            if m["jelly_watched"] else []
+            Span(uname, cls="text-xs font-bold px-1.5 py-0.5 rounded",
+                 style="background:rgba(170,92,195,0.2);color:#AA5CC3")
+            for uname in jelly_watched_by
         ),
         *(
             [Span("Kodi", cls="text-xs font-bold px-1.5 py-0.5 rounded",
                   style="background:rgba(27,187,233,0.2);color:#1BBBE9")]
             if m["kodi_watched"] else []
         ),
-        cls="flex gap-1",
+        cls="flex flex-wrap gap-1",
+    )
+
+    escaped = m["current_file"].replace("'", "\\'")
+    unwatch_fid = f"funwatch-{rid}"
+    unwatch_btn = Div(
+        HtmlButton(
+            UkIcon("eye-off", cls="h-4 w-4 mr-1"), "Unwatch",
+            type="submit", form=unwatch_fid,
+            title="Mark unwatched for all users (removes from archive proposals)",
+            style="background:none;border:1px solid hsl(var(--border));border-radius:0.375rem;"
+                  "padding:5px 22px;cursor:pointer;color:#f59e0b;display:inline-flex;"
+                  "align-items:center;line-height:1.2;width:fit-content",
+            onclick=f"return confirm('Mark {escaped} unwatched for all Jellyfin users and Kodi?')",
+        ),
+        Form(
+            Hidden(name="current_file", value=m["current_file"]),
+            id=unwatch_fid,
+            hx_post="/archive/mark-unwatched",
+            hx_target=f"#{rid}",
+            hx_swap="outerHTML",
+            hx_disabled_elt="find button",
+        ),
     )
 
     if m["needs_rename"]:
-        action = Span("⚠ Rename first", cls="text-yellow-400 text-sm",
-                      title="Go to Movie Renamer tab to rename this file")
+        archive_action = Span("⚠ Rename first", cls="text-yellow-400 text-sm",
+                              title="Go to Movie Renamer tab to rename this file")
     elif not m["exists_on_disk"]:
-        action = Span("⚠ Not found on disk", cls="text-destructive text-sm")
+        archive_action = Span("⚠ Not found on disk", cls="text-destructive text-sm")
     else:
-        escaped = m["current_file"].replace("'", "\\'")
         archive_fid = f"farchive-{rid}"
-        action = Div(
+        archive_action = Div(
             HtmlButton(
                 UkIcon("archive", cls="h-4 w-4 mr-1"), "Archive",
                 type="submit", form=archive_fid,
@@ -765,6 +789,7 @@ def archive_card(m: dict) -> Div:
                 hx_disabled_elt="find button",
             ),
         )
+    action = Div(archive_action, unwatch_btn, cls="flex flex-wrap justify-center gap-2")
 
     return Div(
         _card_field("Filename", m["current_file"]),
@@ -774,7 +799,7 @@ def archive_card(m: dict) -> Div:
             cls="grid grid-cols-2 gap-3",
         ),
         _card_field("Watched by", watch_badges),
-        Div(action, cls="flex justify-center mt-1"),
+        Div(action, cls="mt-1"),
         id=rid,
         cls="border border-border rounded-lg p-4 flex flex-col gap-3",
     )
@@ -867,6 +892,48 @@ def archive_do(current_file: str):
         rid, steps,
         success_msg="Archive complete. Run a Kodi library scan to clean up the old entry.",
         fail_msg="Archive incomplete — see the state notes above for manual recovery.",
+    )
+
+
+@rt("/archive/mark-unwatched")
+def archive_mark_unwatched(current_file: str):
+    logger.debug("/archive/mark-unwatched: current_file='%s'", current_file)
+    rid = _archive_row_id(current_file)
+
+    # Resolve unified_file from the current archive proposal list.
+    proposals = get_watched_transcoded_movies()
+    match = next((m for m in proposals if m["current_file"] == current_file), None)
+    if not match:
+        return _steps_result_card(
+            rid,
+            [{"label": "Resolve file", "ok": False,
+              "detail": f"'{current_file}' not found in current archive proposals.",
+              "current_state": ""}],
+            success_msg="",
+            fail_msg="Could not resolve file — try refreshing from Jellyfin first.",
+        )
+
+    unified_file = match["unified_file"]
+    jelly_ok, jelly_msg = mark_file_unwatched_jellyfin(unified_file)
+    kodi_ok, kodi_msg = mark_movie_unwatched_kodi(unified_file)
+
+    steps = [
+        {"label": "Clear Jellyfin watched state", "ok": jelly_ok,
+         "detail": jelly_msg, "current_state": ""},
+        {"label": "Clear Kodi watched state", "ok": kodi_ok,
+         "detail": kodi_msg, "current_state": ""},
+    ]
+    op_id = uuid.uuid4().hex[:12]
+    log_audit_steps(op_id, "unwatch", current_file, steps)
+
+    if jelly_ok and kodi_ok:
+        logger.info("/archive/mark-unwatched: success for '%s'", current_file)
+        return Div(id=rid, style="display:none")
+
+    return _steps_result_card(
+        rid, steps,
+        success_msg="",
+        fail_msg="Unwatch incomplete — some systems may still show it as watched.",
     )
 
 

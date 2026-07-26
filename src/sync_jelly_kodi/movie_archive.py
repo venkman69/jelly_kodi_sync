@@ -85,6 +85,14 @@ def get_watched_transcoded_movies() -> list[dict]:
             continue
 
         jelly_watched = True
+
+        cursor.execute("""
+            SELECT DISTINCT user_name FROM jellyitems
+            WHERE unified_file = ?
+              AND json_extract(userdata_json, '$.PlayCount') > 0
+        """, (unified_file,))
+        jelly_watched_by = [row[0] for row in cursor.fetchall()]
+
         kodi_items = find_kodi_items_by_file(unified_file)
         kodi_watched = (
             any(k.get("playcount", 0) > 0 for k in kodi_items)
@@ -104,6 +112,7 @@ def get_watched_transcoded_movies() -> list[dict]:
             "needs_rename": not is_kodi_named(current_file),
             "exists_on_disk": real_source is not None,
             "jelly_watched": jelly_watched,
+            "jelly_watched_by": jelly_watched_by,
             "kodi_watched": kodi_watched,
         })
 
