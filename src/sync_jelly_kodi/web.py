@@ -41,6 +41,7 @@ from .jelly_util import mark_file_unwatched_jellyfin
 from .kodi_util import mark_movie_unwatched_kodi
 from .movie_rename import delete_movie, get_transcoded_movies, rename_movie_steps
 from .sqlite_util import (
+    clear_jelly_watch_state_by_file,
     get_audit_operations,
     get_last_pull_times,
     log_audit_step,
@@ -917,20 +918,27 @@ def archive_mark_unwatched(current_file: str):
     jelly_ok, jelly_msg = mark_file_unwatched_jellyfin(unified_file)
     kodi_ok, kodi_msg = mark_movie_unwatched_kodi(unified_file)
 
+    db_updated = clear_jelly_watch_state_by_file(unified_file)
+    db_ok = db_updated >= 0
+    db_msg = f"Updated {db_updated} cached row(s) for '{unified_file}'"
+
     steps = [
         {"label": "Clear Jellyfin watched state", "ok": jelly_ok,
          "detail": jelly_msg, "current_state": ""},
         {"label": "Clear Kodi watched state", "ok": kodi_ok,
          "detail": kodi_msg, "current_state": ""},
+        {"label": "Update local cache", "ok": db_ok,
+         "detail": db_msg, "current_state": ""},
     ]
     op_id = uuid.uuid4().hex[:12]
     log_audit_steps(op_id, "unwatch", current_file, steps)
 
-    return _steps_result_card(
+    result_card = _steps_result_card(
         rid, steps,
-        success_msg="Marked unwatched. Pull from Jellyfin to refresh the proposals list.",
+        success_msg="Marked unwatched — removed from archive proposals.",
         fail_msg="Unwatch incomplete — some systems may still show it as watched.",
     )
+    return result_card, archive_list(oob=True)
 
 
 # --- Audit Log tab ----------------------------------------------------------------

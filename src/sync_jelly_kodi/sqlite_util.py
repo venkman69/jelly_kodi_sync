@@ -279,6 +279,34 @@ def get_watched_kodi_items() -> List[Dict[str, Any]]:
     return results
 
 
+def clear_jelly_watch_state_by_file(unified_file: str) -> int:
+    """Set PlayCount=0, PlaybackPositionTicks=0, Played=False in all jellyitems rows for unified_file.
+
+    Used after a successful unwatch API call to keep the local cache consistent so
+    the movie no longer appears in archive proposals without needing a full pull.
+    """
+    conn = get_sqlite_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, user_id, userdata_json FROM jellyitems WHERE unified_file = ?",
+        (unified_file,)
+    )
+    rows = cursor.fetchall()
+    updated = 0
+    for row_id, user_id, userdata_str in rows:
+        userdata = json.loads(userdata_str)
+        userdata["PlayCount"] = 0
+        userdata["PlaybackPositionTicks"] = 0
+        userdata["Played"] = False
+        cursor.execute(
+            "UPDATE jellyitems SET userdata_json = ? WHERE id = ? AND user_id = ?",
+            (json.dumps(userdata), row_id, user_id),
+        )
+        updated += cursor.rowcount
+    conn.commit()
+    return updated
+
+
 def delete_jelly_items_by_file(unified_file: str) -> int:
     """Delete all jellyitems rows whose unified_file matches ``unified_file``.
 
